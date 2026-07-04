@@ -1,0 +1,20 @@
+任务：基于 MiroFlow 预测框架的金融自进化演进研究
+
+
+研究内容：
+
+
+1. 针对经典预测框架 MiroFlow（https://github.com/MiroMindAI/miroflow） 缺乏非结构化知识留存的缺陷，重构其底层 Agent 认知逻辑。引入memory和skill机制，实现智能体在推理阶段对外部工具、memory与skill的联动调用。
+
+
+2. 将改进后的框架迁移至 A股 市场资产定价，通过实际的预测任务进行基准回测，旨在定量和定性验证升级后的memory与skill模块。（预测哪几支股票自选）
+
+
+3. 提升MiroFlow效果，路径自选。比如借鉴https://github.com/NousResearch/hermes-agent-self-evolution的自进化路径，或者改造多智能体系统
+
+
+预期提交物：需提交一份规范的研究报告（Research Report）和代码打包。报告应阐明系统架构原理的理解、改进方案的理论逻辑、评测体系的构建依据、完整的实验配置以及详实的对比/消融实验结果。本任务采取里程碑考核制，最终评价将综合考量方案的创新性、实验的扎实度以及学术思考的深度。
+
+
+# API keys 见本地 *_key 文件与 MiroFlow/.env，勿提交仓库
+

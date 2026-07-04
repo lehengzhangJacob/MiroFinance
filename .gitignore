@@ -1,0 +1,16 @@
+# API keys & tokens (keep locally only)
+*_key
+tushare_token
+.env
+.env.*
+
+# Python / runtime
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# MiroFlow runtime artifacts (see also MiroFlow/.gitignore)
+MiroFlow/logs/
+MiroFlow/.venv/
