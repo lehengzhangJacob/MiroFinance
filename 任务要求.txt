@@ -15,6 +15,5 @@
 
 预期提交物：需提交一份规范的研究报告（Research Report）和代码打包。报告应阐明系统架构原理的理解、改进方案的理论逻辑、评测体系的构建依据、完整的实验配置以及详实的对比/消融实验结果。本任务采取里程碑考核制，最终评价将综合考量方案的创新性、实验的扎实度以及学术思考的深度。
 
-
-# API keys 见本地 *_key 文件与 MiroFlow/.env，勿提交仓库
+# 密钥配置：大模型 API Key 见 llm_key；工具 Key 见 E2B_key / jina_key / serper_key / tushare_token；MiroFlow/.env 存 URL 与模型名
 

@@ -1,0 +1,48 @@
+# 30-task Greater-China subset of FinSearchComp (seed=42, pilot 3 tasks included)
+defaults:
+  - default
+  - _self_
+
+name: "finsearchcomp-gc30"
+
+data:
+  data_dir: "${data_dir}/finsearchcomp"
+  metadata_file: "standardized_data.jsonl"
+  whitelist:
+    - "(T2)Simple_Historical_Lookup_001"
+    - "(T2)Simple_Historical_Lookup_002"
+    - "(T2)Simple_Historical_Lookup_090"
+    - "(T2)Simple_Historical_Lookup_064"
+    - "(T2)Simple_Historical_Lookup_067"
+    - "(T2)Simple_Historical_Lookup_012"
+    - "(T2)Simple_Historical_Lookup_037"
+    - "(T2)Simple_Historical_Lookup_030"
+    - "(T2)Simple_Historical_Lookup_004"
+    - "(T2)Simple_Historical_Lookup_073"
+    - "(T2)Simple_Historical_Lookup_018"
+    - "(T2)Simple_Historical_Lookup_065"
+    - "(T2)Simple_Historical_Lookup_068"
+    - "(T2)Simple_Historical_Lookup_013"
+    - "(T2)Simple_Historical_Lookup_056"
+    - "(T3)Complex_Historical_Investigation_002"
+    - "(T3)Complex_Historical_Investigation_012"
+    - "(T3)Complex_Historical_Investigation_b024"
+    - "(T3)Complex_Historical_Investigation_031"
+    - "(T3)Complex_Historical_Investigation_b002"
+    - "(T3)Complex_Historical_Investigation_025"
+    - "(T3)Complex_Historical_Investigation_068"
+    - "(T3)Complex_Historical_Investigation_043"
+    - "(T3)Complex_Historical_Investigation_b031"
+    - "(T3)Complex_Historical_Investigation_095"
+    - "(T3)Complex_Historical_Investigation_032"
+    - "(T3)Complex_Historical_Investigation_008"
+    - "(T3)Complex_Historical_Investigation_034"
+    - "(T3)Complex_Historical_Investigation_071"
+    - "(T3)Complex_Historical_Investigation_093"
+
+execution:
+  max_tasks: null
+  max_concurrent: 3
+  pass_at_k: 1
+
+openai_api_key: "${oc.env:OPENAI_API_KEY,???}"

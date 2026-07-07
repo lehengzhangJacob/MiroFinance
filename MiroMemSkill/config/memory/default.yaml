@@ -1,0 +1,10 @@
+# Memory & skill module configuration (MiroMemSkill)
+enabled: true
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills"
+namespace: "default"
+inject_top_k: 3
+skill_top_k: 2
+skill_enabled: true
+reflection_enabled: true
+embedding_model: "embedding-3"

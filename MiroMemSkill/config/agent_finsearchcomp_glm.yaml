@@ -1,0 +1,78 @@
+defaults:
+  - benchmark: finsearchcomp
+  - override hydra/job_logging: none
+  - _self_  # Allow defining variables at the top of this file
+
+
+# GLM (glm-4.6) version of the official FinSearchComp config.
+# Differences vs agent_finsearchcomp_claude37sonnet.yaml (documented for the report):
+# - Claude 3.7 via OpenRouter -> GLM-4.6 direct (native function calling prompts).
+# - hint_generation / final_answer_extraction OFF (official pipeline calls
+#   OpenAI o3 / gpt-4.1 which we do not have).
+# - Worker tools: searching/reading/code only (finance tasks are text-based;
+#   image-video/audio tools dropped).
+# - Judge: official gpt-4o-mini replaced via EVAL_LLM_* envs (see .env).
+main_agent:
+  prompt_class: MainAgentPromptBoxedDeepSeek
+  llm:
+    provider_class: "GPTOpenAIClient"
+    model_name: "${oc.env:GLM_MODEL_NAME,glm-4.6}"
+    async_client: true
+    temperature: 0.3
+    top_p: 0.95
+    min_p: 0.0
+    top_k: -1
+    max_tokens: 32000
+    openai_api_key: "${oc.env:GLM_API_KEY,???}"
+    openai_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+    keep_tool_result: -1
+    oai_tool_thinking: false
+
+  tool_config:
+    - tool-reasoning-glm
+
+  max_turns: 20  # align with official finsearchcomp config
+  max_tool_calls_per_turn: 10
+
+  input_process:
+    hint_generation: false
+    hint_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  output_process:
+    final_answer_extraction: false
+    final_answer_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+
+  openai_api_key: "${oc.env:GLM_API_KEY,???}"
+  add_message_id: true
+  keep_tool_result: -1
+  chinese_context: "${oc.env:CHINESE_CONTEXT,true}"
+
+
+sub_agents:
+  agent-worker:
+    prompt_class: SubAgentWorkerPromptDeepSeek
+    llm:
+      provider_class: "GPTOpenAIClient"
+      model_name: "${oc.env:GLM_MODEL_NAME,glm-4.6}"
+      async_client: true
+      temperature: 0.3
+      top_p: 0.95
+      min_p: 0.0
+      top_k: -1
+      max_tokens: 32000
+      openai_api_key: "${oc.env:GLM_API_KEY,???}"
+      openai_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+      keep_tool_result: -1
+      oai_tool_thinking: false
+
+    tool_config:
+      - tool-searching
+      - tool-reading
+      - tool-code
+
+    max_turns: 20  # align with official finsearchcomp config
+    max_tool_calls_per_turn: 10
+
+
+# Can define some top-level or default parameters here
+output_dir: logs/
+data_dir: "${oc.env:DATA_DIR,data}"  # Points to where data is stored

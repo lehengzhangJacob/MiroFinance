@@ -18,6 +18,8 @@ import hydra
 import openai
 from omegaconf import DictConfig, OmegaConf
 
+from src.utils.env_loader import load_project_env
+
 from utils.eval_utils import verify_answer_for_datasets
 from src.logging.logger import (
     bootstrap_logger,
@@ -121,7 +123,12 @@ class BenchmarkEvaluator(ABC):
         if not self.output_dir.exists():
             os.makedirs(self.output_dir, exist_ok=True)
             print(f"Created output directory: {self.output_dir}")
-        self.evaluation_llm = openai.AsyncOpenAI(api_key=cfg.benchmark.openai_api_key)
+        # Judge client: defaults to official OpenAI; override via EVAL_LLM_* envs
+        # (we point it to DeepSeek since no OpenAI key is available).
+        self.evaluation_llm = openai.AsyncOpenAI(
+            api_key=os.getenv("EVAL_LLM_API_KEY") or cfg.benchmark.openai_api_key,
+            base_url=os.getenv("EVAL_LLM_BASE_URL") or None,
+        )
         self.tasks: List[BenchmarkTask] = []
         self.results: List[BenchmarkResult] = []
 
@@ -702,7 +709,7 @@ def main(*args, config_file_name: str = ""):
     # Register signal handlers for immediate response to Ctrl+C
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    dotenv.load_dotenv()
+    load_project_env()
     LOGGER_LEVEL = os.getenv("LOGGER_LEVEL", "INFO")
 
     # Support load from config_file_name
