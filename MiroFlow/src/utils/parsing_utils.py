@@ -638,7 +638,14 @@ def parse_llm_response_for_tool_calls(llm_response_content_text):
         tool_calls = []
         bad_tool_calls = []
         for tool_call in llm_response_content_text:
-            server_name, tool_name = tool_call.function.name.rsplit("-", maxsplit=1)
+            raw_name = tool_call.function.name
+            if "-" in raw_name:
+                server_name, tool_name = raw_name.rsplit("-", maxsplit=1)
+            else:
+                # Model omitted the "{server}-" prefix (seen with DeepSeek).
+                # Leave server empty: ToolManager.execute_tool_call auto-corrects
+                # by locating the unique server exposing this tool.
+                server_name, tool_name = "", raw_name
             arguments_str = tool_call.function.arguments
 
             # Parse JSON string to dictionary

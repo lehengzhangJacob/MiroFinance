@@ -68,16 +68,17 @@ class MemoryReflector:
     ):
         load_project_env()
         self.store = store
-        # Primary: DeepSeek (GLM balance exhausted 2026-07-07); GLM as fallback.
-        self.model = model or os.getenv("DEEPSEEK_MODEL_NAME") or os.getenv(
-            "GLM_MODEL_NAME", "deepseek-v4-pro"
-        )
-        self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or os.getenv(
-            "GLM_BASE_URL", "https://api.deepseek.com/v1"
-        )
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY") or os.getenv(
-            "GLM_API_KEY", ""
-        )
+        # Resolution order: explicit REFLECTION_LLM_* envs (set per-run, e.g.
+        # moonshot-v1-32k for Kimi runs) > DeepSeek > GLM fallback.
+        self.model = model or os.getenv("REFLECTION_LLM_MODEL_NAME") or os.getenv(
+            "DEEPSEEK_MODEL_NAME"
+        ) or os.getenv("GLM_MODEL_NAME", "deepseek-v4-pro")
+        self.base_url = base_url or os.getenv("REFLECTION_LLM_BASE_URL") or os.getenv(
+            "DEEPSEEK_BASE_URL"
+        ) or os.getenv("GLM_BASE_URL", "https://api.deepseek.com/v1")
+        self.api_key = api_key or os.getenv("REFLECTION_LLM_API_KEY") or os.getenv(
+            "DEEPSEEK_API_KEY"
+        ) or os.getenv("GLM_API_KEY", "")
 
     def _summarize_trajectory(self, log_data: dict[str, Any], max_chars: int = 3000) -> str:
         parts: list[str] = []

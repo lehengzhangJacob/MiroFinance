@@ -1,0 +1,24 @@
+# 6-task smoke subset of ashare-pred (one per stock, staggered months).
+defaults:
+  - default
+  - _self_
+
+name: "ashare-pred"
+
+data:
+  data_dir: "${data_dir}/ashare_pred"
+  metadata_file: "standardized_data.jsonl"
+  whitelist:
+    - "ashare_600519_2024-07-01"
+    - "ashare_300750_2024-09-02"
+    - "ashare_600036_2024-11-01"
+    - "ashare_002594_2025-01-02"
+    - "ashare_600900_2025-03-03"
+    - "ashare_601919_2025-05-06"
+
+execution:
+  max_tasks: null
+  max_concurrent: 1
+  pass_at_k: 1
+
+openai_api_key: "${oc.env:OPENAI_API_KEY,???}"

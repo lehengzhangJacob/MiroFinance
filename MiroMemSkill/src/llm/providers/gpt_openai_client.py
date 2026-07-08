@@ -267,4 +267,17 @@ class GPTOpenAIClient(LLMProviderClientBase):
 
     def handle_max_turns_reached_summary_prompt(self, message_history, summary_prompt):
         """Handle max turns reached summary prompt"""
+        # Strip unanswered tool_calls before the summary user prompt is appended:
+        # strict OpenAI-compatible backends (e.g. DeepSeek) reject any request
+        # where an assistant tool_calls message is not followed by matching
+        # role="tool" replies, which would dead-lock the summary retry loop.
+        answered_ids = {
+            m.get("tool_call_id")
+            for m in message_history
+            if m.get("role") == "tool"
+        }
+        for msg in message_history:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                if any(tc.get("id") not in answered_ids for tc in msg["tool_calls"]):
+                    msg.pop("tool_calls", None)
         return summary_prompt
