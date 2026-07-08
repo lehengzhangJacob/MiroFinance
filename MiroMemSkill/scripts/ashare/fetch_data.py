@@ -30,14 +30,19 @@ TUSHARE_API = "http://api.tushare.pro"
 START_DATE = "20230101"
 END_DATE = "20250731"
 
-# Liquid large caps across sectors (chosen per task doc: stocks are self-picked).
+# Pool v2 (2026-07-08). Ex-ante rule, formation date 2024-06-28 (before the
+# backtest window) to avoid survivorship/selection bias toward index winners:
+#   - 3 prior losers + 3 prior winners by 2024H1 excess return vs CSI300;
+#   - 2 names NOT in CSI300 (300012.SZ, 688169.SH); 6 distinct industries;
+#   - main board / ChiNext / STAR mix; no overlap with pool v1 mega-caps.
+# Pool v1 (茅台/宁德/招行/比亚迪/长电/海控) archived in meta_pool1.json.
 STOCK_POOL: dict[str, dict[str, str]] = {
-    "600519.SH": {"name": "贵州茅台", "industry": "白酒"},
-    "300750.SZ": {"name": "宁德时代", "industry": "电池"},
-    "600036.SH": {"name": "招商银行", "industry": "银行"},
-    "002594.SZ": {"name": "比亚迪", "industry": "汽车整车"},
-    "600900.SH": {"name": "长江电力", "industry": "电力"},
-    "601919.SH": {"name": "中远海控", "industry": "航运"},
+    "603259.SH": {"name": "药明康德", "industry": "医药外包"},
+    "000002.SZ": {"name": "万科A", "industry": "房地产"},
+    "300012.SZ": {"name": "华测检测", "industry": "检测服务"},
+    "601899.SH": {"name": "紫金矿业", "industry": "有色金属"},
+    "601138.SH": {"name": "工业富联", "industry": "AI服务器"},
+    "688169.SH": {"name": "石头科技", "industry": "智能清洁电器"},
 }
 INDEX_CODE = "000300.SH"  # CSI 300
 
