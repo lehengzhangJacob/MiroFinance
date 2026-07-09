@@ -13,9 +13,10 @@ deploy/logs/
 # Course archives (local reference only)
 *.7z
 
-# Episodic memory banks (runtime artifacts; skills/ kept)
-MiroMemSkill/memory_bank/*_episodic.jsonl
+# MiroMemSkill runtime memory (skills/*.md and skills_ashare/*.md stay tracked)
+MiroMemSkill/memory_bank/*.jsonl
 MiroMemSkill/memory_bank/*.bak*
+MiroMemSkill/logs/
 
 # Hermes local runtime
 hermes-agent-self-evolution/.venv/
