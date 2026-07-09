@@ -4,6 +4,27 @@ tushare_token
 .env
 .env.*
 
+# Conda exported requirements (regenerate via conda/setup_*.sh)
+conda/requirements-*.txt
+
+# Runtime logs (nohup pool3, hermes evolve, etc.)
+logs/
+
+# Course archives (local reference only)
+*.7z
+
+# Episodic memory banks (runtime artifacts; skills/ kept)
+MiroMemSkill/memory_bank/*_episodic.jsonl
+MiroMemSkill/memory_bank/*.bak*
+
+# Hermes local runtime
+hermes-agent-self-evolution/.venv/
+hermes-agent-self-evolution/logs/
+hermes-agent-self-evolution/output/
+hermes-agent-self-evolution/.pytest_cache/
+hermes-agent-self-evolution/*.egg-info/
+hermes-agent-self-evolution/datasets/**/*.jsonl
+
 # Python / runtime
 __pycache__/
 *.py[cod]

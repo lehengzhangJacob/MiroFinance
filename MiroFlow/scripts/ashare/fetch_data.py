@@ -30,18 +30,26 @@ TUSHARE_API = "http://api.tushare.pro"
 START_DATE = "20230101"
 END_DATE = "20250731"
 
-# Pool v2 (2026-07-08). Ex-ante rule, formation date 2024-06-28 (before the
-# backtest window) to avoid survivorship/selection bias toward index winners:
-#   - 3 prior losers + 3 prior winners by 2024H1 excess return vs CSI300;
-#   - 2 names NOT in CSI300 (300012.SZ, 688169.SH); 6 distinct industries;
-#   - main board / ChiNext / STAR mix; no overlap with pool v1 mega-caps.
-# Pool v1 (茅台/宁德/招行/比亚迪/长电/海控) archived in meta_pool1.json.
+# Pool v3 (2026-07-09). Ex-ante rule, formation date 2024-06-28:
+#   - 12 stocks, 8 industries, main/ChiNext/STAR mix;
+#   - 4 CSI300 (33%) for index generalizability + 8 non-index mid-caps;
+#   - 6 prior losers + 6 prior winners by 2024H1 excess vs CSI300;
+#   - no overlap with pool v1 mega-caps (茅台/宁德/招行/比亚迪/长电/海控).
+# Pool v2 (6 stocks) archived in meta_pool2.json.
 STOCK_POOL: dict[str, dict[str, str]] = {
+    # --- CSI300 minority (4) ---
     "603259.SH": {"name": "药明康德", "industry": "医药外包"},
-    "000002.SZ": {"name": "万科A", "industry": "房地产"},
-    "300012.SZ": {"name": "华测检测", "industry": "检测服务"},
+    "002415.SZ": {"name": "海康威视", "industry": "安防"},
     "601899.SH": {"name": "紫金矿业", "industry": "有色金属"},
-    "601138.SH": {"name": "工业富联", "industry": "AI服务器"},
+    "601021.SH": {"name": "春秋航空", "industry": "航空"},
+    # --- non-CSI300 majority (8) ---
+    "300012.SZ": {"name": "华测检测", "industry": "检测服务"},
+    "688005.SH": {"name": "容百科技", "industry": "锂电材料"},
+    "603345.SH": {"name": "安井食品", "industry": "速冻食品"},
+    "601155.SH": {"name": "新城控股", "industry": "房地产"},
+    "002507.SZ": {"name": "涪陵榨菜", "industry": "食品"},
+    "002508.SZ": {"name": "老板电器", "industry": "厨电"},
+    "601233.SH": {"name": "桐昆股份", "industry": "化纤"},
     "688169.SH": {"name": "石头科技", "industry": "智能清洁电器"},
 }
 INDEX_CODE = "000300.SH"  # CSI 300

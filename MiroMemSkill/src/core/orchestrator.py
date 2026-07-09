@@ -788,9 +788,14 @@ Your objective is maximum completeness, transparency, and detailed documentation
                         skill_lib=skill_lib,
                         inject_top_k=int(self.cfg.memory.get("inject_top_k", 3)),
                         skill_top_k=int(self.cfg.memory.get("skill_top_k", 2)),
-                        memory_enabled=True,
+                        # inject_enabled=false gives a skill-only ablation arm
+                        # (memory components loaded, retrieval not injected).
+                        memory_enabled=bool(self.cfg.memory.get("inject_enabled", True)),
                         skill_enabled=bool(
                             self.cfg.memory.get("skill_enabled", True) and skill_lib
+                        ),
+                        skill_preview_min_score=float(
+                            self.cfg.memory.get("skill_preview_min_score", 0.0)
                         ),
                     )
                     if memory_block:

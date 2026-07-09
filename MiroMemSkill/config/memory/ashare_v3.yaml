@@ -1,0 +1,15 @@
+# Memory & skill config for pool-v3 A-share benchmark (clean namespace).
+# Isolated from ashare (pool-v2 memories) so this run tests the hardened
+# write/retrieve pipeline on a fresh episodic bank.
+enabled: true
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_v3"
+inject_top_k: 3
+skill_top_k: 2
+skill_enabled: true
+reflection_enabled: true
+embedding_model: "embedding-3"
+inject_enabled: true
+dedupe_threshold: 0.8
+skill_preview_min_score: 2.0

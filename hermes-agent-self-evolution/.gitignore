@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+.env
+
+# Evolution run outputs
+output/
+
+# Generated eval datasets (local, not shared)
+datasets/**/*.jsonl
+datasets/**/*.json
+!datasets/.gitkeep
+
+# Evolution snapshots
+snapshots/
+*.pkl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -10,3 +10,11 @@ skill_top_k: 2
 skill_enabled: true
 reflection_enabled: true
 embedding_model: "embedding-3"
+# Ablation switch: false = load skills but do NOT inject retrieved memories
+# (skill-only arm). memory.enabled=false remains the no-memory baseline.
+inject_enabled: true
+# Write-side near-duplicate filter (token-set Jaccard, CJK bigrams).
+dedupe_threshold: 0.8
+# Full skill body is injected only when match score >= this value.
+# Under keyword scoring (embeddings off) 2.0 == at least one trigger hit.
+skill_preview_min_score: 2.0

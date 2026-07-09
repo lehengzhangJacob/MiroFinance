@@ -19,7 +19,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from src.memory.store import MemoryStore
+from src.memory.store import MemoryStore, stance_of
 from src.utils.env_loader import load_project_env
 
 
@@ -30,11 +30,20 @@ def _is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout))
 
 
-REFLECTION_PROMPT = """You are a meta-learning assistant for a financial research agent.
+_PROMPT_HEADER = """You are a meta-learning assistant for a financial research agent.
 
-Given a completed task, distill 1-2 reusable STRATEGY lessons (NOT the task's final answer).
-Focus on: search strategy, source selection, calculation approach, common pitfalls, formatting rules.
-Do NOT include the ground-truth answer or specific numeric result of this task.
+{outcome_instructions}
+
+Hard requirements:
+- Be CONCRETE: name the exact indicator / tool / threshold / step involved
+  (e.g. "when 20d and 60d relative momentum disagree, trust the 20d window only if
+  turnover is also rising"), never generic advice like "consider multiple factors".
+- Phrase lessons as conditional tendencies, NOT guaranteed rules — a single task outcome
+  is noisy evidence, especially for market-direction predictions.
+- Do NOT restate the task protocol (point-in-time rules, boxed output format).
+- Do NOT include the ground-truth answer or specific numeric result of this task.
+- Do NOT repeat or trivially rephrase anything under "Already stored lessons".
+- If this task teaches nothing genuinely new, return {{"lessons": []}}.
 
 Task question (truncated):
 {question}
@@ -47,6 +56,9 @@ Judge result: {judge_result}
 Trajectory summary (truncated):
 {trajectory}
 
+Already stored lessons (do NOT repeat these):
+{existing}
+
 Return ONLY valid JSON:
 {{
   "lessons": [
@@ -54,6 +66,20 @@ Return ONLY valid JSON:
   ]
 }}
 """
+
+_CORRECT_INSTRUCTIONS = """Given a completed task the agent answered CORRECTLY, distill AT MOST 2
+reusable STRATEGY lessons (NOT the task's final answer). Focus on decision procedures: which
+evidence to weight under what conditions, tool-usage tactics, calculation pitfalls,
+output-format traps."""
+
+_INCORRECT_INSTRUCTIONS = """The agent's reasoning below led to a WRONG prediction. Distill AT MOST 1
+COUNTER-LESSON describing the failure mode: under what conditions the heuristic the agent relied on
+breaks down, and what disconfirming evidence it should have checked.
+
+CRITICAL: do NOT restate the agent's failed reasoning as a positive rule (e.g. if the agent
+predicted 跑输 based on weak momentum and was wrong, the lesson must NOT be "weak momentum implies
+跑输" — it must be "weak momentum alone is unreliable for predicting 跑输 when <specific
+counter-condition observed here>"). The lesson must encode WHY this line of reasoning failed."""
 
 
 class MemoryReflector:
@@ -135,6 +161,17 @@ class MemoryReflector:
         except json.JSONDecodeError:
             return [{"content": text[:500], "tags": ["reflection"]}]
 
+    @staticmethod
+    def _extract_direction(answer: str) -> str:
+        """Pull the predicted direction (跑赢/跑输) out of the final answer."""
+        text = answer or ""
+        if "跑赢" in text and "跑输" not in text:
+            return "跑赢"
+        if "跑输" in text and "跑赢" not in text:
+            return "跑输"
+        m = re.search(r"\\boxed\{(跑赢|跑输)\}", text)
+        return m.group(1) if m else ""
+
     def reflect_and_store(
         self,
         question: str,
@@ -147,11 +184,29 @@ class MemoryReflector:
             return []
 
         trajectory = self._summarize_trajectory(log_data or {})
-        prompt = REFLECTION_PROMPT.format(
+        # Show the reflector what similar lessons already exist so it can
+        # return novel ones (or an empty list) instead of re-deriving the
+        # same generic advice on every task.
+        try:
+            similar = self.store.search(question[:300], top_k=3)
+            existing_block = "\n".join(f"- {e.content[:200]}" for e, _ in similar) or "None"
+        except Exception:
+            existing_block = "None"
+
+        # INCORRECT tasks must yield counter-lessons (why the heuristic
+        # failed), never a restatement of the losing logic as a rule —
+        # restated failures were the main driver of pool3's bearish collapse.
+        is_incorrect = judge_result == "INCORRECT"
+        outcome_instructions = _INCORRECT_INSTRUCTIONS if is_incorrect else _CORRECT_INSTRUCTIONS
+        max_lessons = 1 if is_incorrect else 2
+
+        prompt = _PROMPT_HEADER.format(
+            outcome_instructions=outcome_instructions,
             question=question[:800],
             answer=(answer or "N/A")[:400],
             judge_result=judge_result,
             trajectory=trajectory or "N/A",
+            existing=existing_block,
         )
 
         try:
@@ -162,11 +217,14 @@ class MemoryReflector:
             print(f"    Reflection LLM call failed after retries (skipped): {exc}")
             return []
 
+        predicted_direction = self._extract_direction(answer)
         stored: list[str] = []
-        for lesson in lessons[:2]:
+        for lesson in lessons[:max_lessons]:
             content = lesson.get("content", "").strip()
             if not content:
                 continue
+            if self.store.find_near_duplicate(content) is not None:
+                continue  # write-side dedup: keep the memory bank non-redundant
             tags = lesson.get("tags", ["reflection", judge_result.lower()])
             self.store.add(
                 content=content,
@@ -176,7 +234,10 @@ class MemoryReflector:
                     "task_id": task_id,
                     "judge_result": judge_result,
                     "source": "reflection",
+                    "predicted_direction": predicted_direction,
+                    "stance": stance_of(content),
                 },
+                dedupe=False,  # already checked above
             )
             stored.append(content)
         return stored

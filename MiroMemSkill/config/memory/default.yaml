@@ -8,3 +8,8 @@ skill_top_k: 2
 skill_enabled: true
 reflection_enabled: true
 embedding_model: "embedding-3"
+inject_enabled: true
+dedupe_threshold: 0.8
+# >= one trigger hit required before pasting a full skill body (prevents
+# false-positive previews like fx_rounding firing on unrelated tasks).
+skill_preview_min_score: 2.0

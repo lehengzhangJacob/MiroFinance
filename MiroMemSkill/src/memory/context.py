@@ -11,6 +11,21 @@ from omegaconf import DictConfig
 from src.memory.skills import SkillLibrary
 from src.memory.store import MemoryStore
 
+# Benchmark task prompts share large boilerplate sections (data-usage rules,
+# output format). Cutting at these markers keys retrieval on the task-specific
+# head (stock, industry, date) instead of template text shared by every task.
+_QUERY_CUT_MARKERS = ["数据使用规则", "输出要求", "Data usage rules"]
+
+
+def compact_task_query(task_description: str, max_chars: int = 400) -> str:
+    text = task_description
+    for marker in _QUERY_CUT_MARKERS:
+        idx = text.find(marker)
+        if idx > 0:
+            text = text[:idx]
+            break
+    return text.strip()[:max_chars]
+
 
 def get_memory_components(cfg: DictConfig) -> tuple[MemoryStore | None, SkillLibrary | None]:
     if not cfg.get("memory") or not cfg.memory.get("enabled", False):
@@ -20,7 +35,11 @@ def get_memory_components(cfg: DictConfig) -> tuple[MemoryStore | None, SkillLib
     namespace = cfg.memory.get("namespace", "default")
     skills_dir = cfg.memory.get("skills_dir", f"{store_dir}/skills")
 
-    store = MemoryStore(store_dir=store_dir, namespace=namespace)
+    store = MemoryStore(
+        store_dir=store_dir,
+        namespace=namespace,
+        dedupe_threshold=float(cfg.memory.get("dedupe_threshold", 0.8)),
+    )
     skill_lib = SkillLibrary(skills_dir=skills_dir) if cfg.memory.get("skill_enabled", True) else None
     return store, skill_lib
 
@@ -33,23 +52,38 @@ def build_memory_context_block(
     skill_top_k: int = 2,
     memory_enabled: bool = True,
     skill_enabled: bool = True,
+    skill_preview_min_score: float = 0.0,
 ) -> str:
     sections: list[str] = []
+    query = compact_task_query(task_description)
 
     if memory_enabled:
-        results = store.search(task_description, top_k=inject_top_k)
+        # Stance-balanced retrieval: never let the injected experiences stack
+        # one direction, or they act as a prior and the agent's predictions
+        # collapse toward the bank's majority stance.
+        results = store.search_balanced(query, top_k=inject_top_k)
         if results:
-            sections.append("### Relevant Past Experiences\n" + store.format_search_results(results))
+            sections.append(
+                "### Relevant Past Experiences\n"
+                "(Conditional heuristics from past tasks — NOT direction priors. "
+                "Evaluate the current task's own evidence first; your final call must "
+                "be supported by the data you retrieve now, not by these notes.)\n"
+                + store.format_search_results(results)
+            )
 
     if skill_enabled and skill_lib:
-        matches = skill_lib.match(task_description, top_k=skill_top_k)
+        matches = skill_lib.match(query, top_k=skill_top_k)
         if matches:
             sections.append("### Recommended Skills\n" + skill_lib.format_matches(matches))
-            top_skill = matches[0][0]
-            sections.append(
-                "### Top Skill Preview\n"
-                + skill_lib.load_skill_text(top_skill.name)[:1500]
-            )
+            top_skill, top_score = matches[0]
+            # Only paste the full skill body when the match is confident
+            # (>= one trigger hit under keyword scoring); otherwise the agent
+            # can still pull it explicitly via skill_load.
+            if top_score >= skill_preview_min_score:
+                sections.append(
+                    "### Top Skill Preview\n"
+                    + skill_lib.load_skill_text(top_skill.name)[:1500]
+                )
 
     if not sections:
         return ""

@@ -68,6 +68,15 @@
 
 ## ⚡ 快速设置
 
+**Conda（本仓库推荐）**：MiroFlow 与 MiroMemSkill 共用 `Miro` 环境：
+
+```bash
+# 在 agent 仓库根目录
+./conda/setup_miro.sh
+conda activate Miro
+cd MiroFlow && python main.py --help
+```
+
 **示例**: 带文档处理能力的智能文档分析。
 
 ```bash

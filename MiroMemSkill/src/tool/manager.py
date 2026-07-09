@@ -4,6 +4,7 @@
 
 import asyncio
 import functools
+import os
 from typing import Any, Awaitable, Callable, Protocol, TypeVar
 
 from mcp import ClientSession, StdioServerParameters  # (already imported in config.py)
@@ -12,6 +13,13 @@ from mcp.client.stdio import stdio_client
 
 from src.logging.logger import bootstrap_logger
 from .mcp_servers.browser_session import PlaywrightSession
+
+# MCP stdio subprocesses can occasionally wedge (dead pipe, spawn race); a bare
+# await then hangs the task forever (observed: pool3 baseline stuck 5h+ after
+# turn 1). Bound every session step so a wedged server fails the tool call
+# instead of the whole benchmark run.
+MCP_SESSION_INIT_TIMEOUT = float(os.getenv("MCP_SESSION_INIT_TIMEOUT", "60"))
+MCP_TOOL_CALL_TIMEOUT = float(os.getenv("MCP_TOOL_CALL_TIMEOUT", "300"))
 
 import os
 
@@ -365,10 +373,14 @@ class ToolManager(ToolManagerProtocol):
                         async with ClientSession(
                             read, write, sampling_callback=None
                         ) as session:
-                            await session.initialize()
+                            await asyncio.wait_for(
+                                session.initialize(),
+                                timeout=MCP_SESSION_INIT_TIMEOUT,
+                            )
                             try:
-                                tool_result = await session.call_tool(
-                                    tool_name, arguments=arguments
+                                tool_result = await asyncio.wait_for(
+                                    session.call_tool(tool_name, arguments=arguments),
+                                    timeout=MCP_TOOL_CALL_TIMEOUT,
                                 )
                                 # Safely extract result content without changing original format
                                 if tool_result.content and len(tool_result.content) > 0:
@@ -394,6 +406,15 @@ class ToolManager(ToolManagerProtocol):
                                 # post hoc check for browsing agent reading answers from hf datsets
                                 if self._should_block_hf_scraping(tool_name, arguments):
                                     result_content = "You are trying to scrape a Hugging Face dataset for answers, please do not use the scrape tool for this purpose."
+                            except asyncio.TimeoutError:
+                                logger.error(
+                                    f"Tool '{tool_name}' (server '{server_name}') timed out after {MCP_TOOL_CALL_TIMEOUT}s"
+                                )
+                                return {
+                                    "server_name": server_name,
+                                    "tool_name": tool_name,
+                                    "error": f"Tool execution timed out after {MCP_TOOL_CALL_TIMEOUT}s. Please retry, possibly with simpler arguments.",
+                                }
                             except Exception as tool_error:
                                 logger.error(f"Tool execution error: {tool_error}")
                                 return {
@@ -408,10 +429,14 @@ class ToolManager(ToolManagerProtocol):
                         async with ClientSession(
                             read, write, sampling_callback=None
                         ) as session:
-                            await session.initialize()
+                            await asyncio.wait_for(
+                                session.initialize(),
+                                timeout=MCP_SESSION_INIT_TIMEOUT,
+                            )
                             try:
-                                tool_result = await session.call_tool(
-                                    tool_name, arguments=arguments
+                                tool_result = await asyncio.wait_for(
+                                    session.call_tool(tool_name, arguments=arguments),
+                                    timeout=MCP_TOOL_CALL_TIMEOUT,
                                 )
                                 # Safely extract result content without changing original format
                                 if tool_result.content and len(tool_result.content) > 0:
@@ -437,6 +462,15 @@ class ToolManager(ToolManagerProtocol):
                                 # post hoc check for browsing agent reading answers from hf datsets
                                 if self._should_block_hf_scraping(tool_name, arguments):
                                     result_content = "You are trying to scrape a Hugging Face dataset for answers, please do not use the scrape tool for this purpose."
+                            except asyncio.TimeoutError:
+                                logger.error(
+                                    f"Tool '{tool_name}' (server '{server_name}') timed out after {MCP_TOOL_CALL_TIMEOUT}s"
+                                )
+                                return {
+                                    "server_name": server_name,
+                                    "tool_name": tool_name,
+                                    "error": f"Tool execution timed out after {MCP_TOOL_CALL_TIMEOUT}s. Please retry, possibly with simpler arguments.",
+                                }
                             except Exception as tool_error:
                                 logger.error(f"Tool execution error: {tool_error}")
                                 return {

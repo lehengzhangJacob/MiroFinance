@@ -27,7 +27,43 @@ def _utc_now() -> str:
 
 
 def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+    """ASCII words as-is; CJK runs as character bigrams.
+
+    The old pattern treated an entire run of Chinese text as ONE token, which
+    reduced BM25/Jaccard to near-exact clause matching. Bigrams give Chinese
+    text proper term granularity for retrieval and dedup.
+    """
+    tokens: list[str] = []
+    for match in re.finditer(r"[a-z0-9_]+|[\u4e00-\u9fff]+", text.lower()):
+        run = match.group(0)
+        if "\u4e00" <= run[0] <= "\u9fff" and len(run) > 1:
+            tokens.extend(run[i : i + 2] for i in range(len(run) - 1))
+        else:
+            tokens.append(run)
+    return tokens
+
+
+# Directional stance keywords for A-share prediction lessons. A lesson that
+# leans one way acts as a direction prior when injected; retrieval must not
+# stack same-stance lessons or the agent inherits the bank's majority bias
+# (pool3: 131/144 predictions collapsed to 跑输).
+_BULLISH_KW = ("跑赢", "做多", "买入", "增持", "延续强势", "上攻", "outperform")
+_BEARISH_KW = ("跑输", "做空", "回调", "均值回归", "延续弱势", "抛压", "underperform")
+
+
+def stance_of(text: str) -> str:
+    """Classify a lesson's directional stance: bullish | bearish | neutral.
+
+    Lessons mentioning both directions (e.g. "X时跑赢，Y时跑输") are
+    conditional rather than directional, so they count as neutral.
+    """
+    has_bull = any(k in text for k in _BULLISH_KW)
+    has_bear = any(k in text for k in _BEARISH_KW)
+    if has_bull and not has_bear:
+        return "bullish"
+    if has_bear and not has_bull:
+        return "bearish"
+    return "neutral"
 
 
 @dataclass
@@ -72,12 +108,14 @@ class MemoryStore:
         store_dir: str | Path,
         namespace: str = "default",
         embedding_model: str = "embedding-3",
+        dedupe_threshold: float = 0.8,
     ):
         load_project_env()
         self.store_dir = Path(store_dir)
         self.store_dir.mkdir(parents=True, exist_ok=True)
         self.namespace = namespace
         self.embedding_model = embedding_model
+        self.dedupe_threshold = dedupe_threshold
         self.episodic_path = self.store_dir / f"{namespace}_episodic.jsonl"
         self.semantic_path = self.store_dir / f"{namespace}_semantic.jsonl"
         self._entries: list[MemoryEntry] = []
@@ -109,6 +147,23 @@ class MemoryStore:
             f.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
         self._entries.append(entry)
 
+    def find_near_duplicate(
+        self, content: str, threshold: Optional[float] = None
+    ) -> Optional[MemoryEntry]:
+        """Return an existing entry whose token-set Jaccard >= threshold, else None."""
+        thr = self.dedupe_threshold if threshold is None else threshold
+        new_tokens = set(_tokenize(content))
+        if not new_tokens:
+            return None
+        for entry in self._entries:
+            old_tokens = set(_tokenize(entry.content))
+            if not old_tokens:
+                continue
+            jaccard = len(new_tokens & old_tokens) / len(new_tokens | old_tokens)
+            if jaccard >= thr:
+                return entry
+        return None
+
     def add(
         self,
         content: str,
@@ -116,7 +171,12 @@ class MemoryStore:
         tags: Optional[list[str]] = None,
         metadata: Optional[dict[str, Any]] = None,
         compute_embedding: bool = True,
+        dedupe: bool = True,
     ) -> MemoryEntry:
+        if dedupe:
+            existing = self.find_near_duplicate(content)
+            if existing is not None:
+                return existing
         entry = MemoryEntry(
             id=str(uuid.uuid4()),
             kind=kind,
@@ -230,6 +290,47 @@ class MemoryStore:
                 pass
 
         return self._bm25_search(query, top_k, kinds)
+
+    def search_balanced(
+        self,
+        query: str,
+        top_k: int = 5,
+        kinds: Optional[list[str]] = None,
+    ) -> list[tuple[MemoryEntry, float]]:
+        """Similarity search with a per-stance quota.
+
+        At most ceil(top_k/2) of the returned entries may share one
+        directional stance (bullish/bearish); neutral lessons are exempt.
+        This keeps the injected context from becoming a direction prior when
+        the bank's stance distribution is skewed. Falls back to plain top-k
+        when candidates are scarce.
+        """
+        wide = self.search(query, top_k=top_k * 4, kinds=kinds)
+        if len(wide) <= top_k:
+            return wide
+
+        max_per_stance = math.ceil(top_k / 2)
+        picked: list[tuple[MemoryEntry, float]] = []
+        stance_counts: Counter = Counter()
+        deferred: list[tuple[MemoryEntry, float]] = []
+
+        for entry, score in wide:
+            if len(picked) >= top_k:
+                break
+            stance = stance_of(entry.content)
+            if stance != "neutral" and stance_counts[stance] >= max_per_stance:
+                deferred.append((entry, score))
+                continue
+            picked.append((entry, score))
+            stance_counts[stance] += 1
+
+        # Backfill from deferred entries if the quota left empty slots.
+        for entry, score in deferred:
+            if len(picked) >= top_k:
+                break
+            picked.append((entry, score))
+
+        return picked
 
     def format_search_results(self, results: list[tuple[MemoryEntry, float]]) -> str:
         if not results:
