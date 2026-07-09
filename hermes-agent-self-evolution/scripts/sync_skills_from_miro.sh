@@ -14,4 +14,13 @@ for f in "$SRC"/*.md; do
     cp "$f" "$DST/$name/SKILL.md"
     echo "  $name -> hermes-agent/skills/ashare/$name/SKILL.md"
 done
+# Packaged skills (directory with SKILL.md + scripts/config): copy whole tree.
+for d in "$SRC"/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    name="$(basename "$d")"
+    mkdir -p "$DST/$name"
+    rsync -a --delete --exclude='__pycache__' --exclude='.pytest_cache' \
+        "$d" "$DST/$name/"
+    echo "  $name/ -> hermes-agent/skills/ashare/$name/ (packaged)"
+done
 echo "done ($(ls "$DST" | wc -l) skills)"

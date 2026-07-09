@@ -49,7 +49,12 @@ class SkillLibrary:
 
     def reload(self) -> None:
         self._skills = []
-        for path in sorted(self.skills_dir.glob("*.md")):
+        # Flat skills (skills_dir/foo.md) plus packaged skills that ship
+        # scripts/config alongside a SKILL.md (skills_dir/foo/SKILL.md).
+        paths = sorted(self.skills_dir.glob("*.md")) + sorted(
+            self.skills_dir.glob("*/SKILL.md")
+        )
+        for path in paths:
             skill = self._parse_skill_file(path)
             if skill:
                 self._skills.append(skill)
@@ -86,7 +91,11 @@ class SkillLibrary:
     def get_skill(self, name: str) -> Optional[Skill]:
         name_lower = name.lower()
         for skill in self._skills:
-            if skill.name.lower() == name_lower or Path(skill.path).stem.lower() == name_lower:
+            path = Path(skill.path)
+            # For packaged skills the stem is always "SKILL"; the directory
+            # name is the meaningful identifier.
+            file_key = path.parent.name if path.stem == "SKILL" else path.stem
+            if skill.name.lower() == name_lower or file_key.lower() == name_lower:
                 return skill
         return None
 
