@@ -85,7 +85,9 @@ def get_hermes_agent_path() -> Path:
     if home_path.exists():
         return home_path
 
-    sibling_path = Path(__file__).parent.parent.parent / "hermes-agent"
+    # True sibling checkout: <parent>/hermes-agent, not this project's bundled
+    # hermes-agent fixture/stub directory.
+    sibling_path = Path(__file__).resolve().parents[3] / "hermes-agent"
     if sibling_path.exists():
         return sibling_path
 
