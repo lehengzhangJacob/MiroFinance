@@ -2,11 +2,11 @@
 # Create/update conda env "Miro" for MiroFlow + MiroMemSkill.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONDA_DIR="$ROOT/conda"
+AGENT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+CONDA_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> Exporting locked deps from MiroFlow/uv.lock"
-cd "$ROOT/MiroFlow"
+cd "$AGENT_ROOT/MiroFlow"
 uv export --frozen --no-dev --no-emit-project -o "$CONDA_DIR/requirements-miro.txt"
 
 echo "==> Creating/updating conda env: Miro"
@@ -18,8 +18,8 @@ fi
 
 echo "==> Installing pip dependencies"
 conda run -n Miro pip install -r "$CONDA_DIR/requirements-miro.txt"
-conda run -n Miro pip install -e "$ROOT/MiroFlow"
-conda run -n Miro pip install -e "$ROOT/MiroMemSkill"
+conda run -n Miro pip install -e "$AGENT_ROOT/MiroFlow"
+conda run -n Miro pip install -e "$AGENT_ROOT/MiroMemSkill"
 
 echo "==> Miro env ready"
 conda run -n Miro python -c "import hydra, fastmcp, openai; print('imports ok')"

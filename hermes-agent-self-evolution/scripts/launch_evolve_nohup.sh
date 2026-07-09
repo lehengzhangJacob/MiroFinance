@@ -28,7 +28,7 @@ if [ ! -x "$PYTHON" ]; then
   PYTHON="$(conda run -n Hermes which python 2>/dev/null || true)"
 fi
 if [ ! -x "$PYTHON" ]; then
-  echo "Hermes conda env not found. Run: $ROOT/../conda/setup_hermes.sh" >&2
+  echo "Hermes conda env not found. Run: $(cd "$ROOT/.." && pwd)/deploy/conda/setup_hermes.sh" >&2
   exit 1
 fi
 

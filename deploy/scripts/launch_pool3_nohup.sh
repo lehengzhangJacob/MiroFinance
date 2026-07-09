@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch pool3 Kimi baseline + MemSkill with nohup (survives terminal/IDE exit).
 set -u
-AGENT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+AGENT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 KEY=$(grep -oP '(?<=KIMI_API_KEY=).*' "$AGENT_ROOT/llm_key")
 
 # A-share + Kimi (moonshot.cn) are domestic; proxy from BASH_ENV breaks httpx
@@ -16,7 +16,7 @@ export REFLECTION_LLM_API_KEY="$KEY"
 export REFLECTION_LLM_BASE_URL="https://api.moonshot.cn/v1"
 export REFLECTION_LLM_MODEL_NAME="moonshot-v1-32k"
 
-LOG_DIR="$AGENT_ROOT/logs/nohup_pool3"
+LOG_DIR="$AGENT_ROOT/deploy/logs/nohup_pool3"
 mkdir -p "$LOG_DIR"
 
 # Baseline (MiroFlow)

@@ -2,9 +2,9 @@
 # Create/update conda env "Hermes" for hermes-agent-self-evolution.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONDA_DIR="$ROOT/conda"
-HERMES="$ROOT/hermes-agent-self-evolution"
+AGENT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+CONDA_DIR="$(cd "$(dirname "$0")" && pwd)"
+HERMES="$AGENT_ROOT/hermes-agent-self-evolution"
 
 echo "==> Writing Hermes requirements (no uv.lock in project)"
 cat > "$CONDA_DIR/requirements-hermes.txt" <<'EOF'

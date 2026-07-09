@@ -4,11 +4,11 @@ tushare_token
 .env
 .env.*
 
-# Conda exported requirements (regenerate via conda/setup_*.sh)
-conda/requirements-*.txt
+# Conda exported requirements (regenerate via deploy/conda/setup_*.sh)
+deploy/conda/requirements-*.txt
 
 # Runtime logs (nohup pool3, hermes evolve, etc.)
-logs/
+deploy/logs/
 
 # Course archives (local reference only)
 *.7z

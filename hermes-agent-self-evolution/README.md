@@ -87,7 +87,7 @@ MIT — © 2026 Nous Research
 
 ```bash
 # 在 agent 仓库根目录
-./conda/setup_hermes.sh
+./deploy/conda/setup_hermes.sh
 conda activate Hermes
 cd hermes-agent-self-evolution
 ./scripts/run_evolve.sh ashare_prediction_protocol 3 --dry-run

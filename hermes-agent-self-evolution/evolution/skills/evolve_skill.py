@@ -119,6 +119,12 @@ def evolve(
     console.print(f"\n[bold]Validating baseline constraints[/bold]")
     validator = ConstraintValidator(config)
     baseline_constraints = validator.validate_all(skill["body"], "skill")
+    baseline_constraints = [
+        validator._check_skill_structure(skill["raw"])
+        if c.constraint_name == "skill_structure"
+        else c
+        for c in baseline_constraints
+    ]
     all_pass = True
     for c in baseline_constraints:
         icon = "✓" if c.passed else "✗"
@@ -192,7 +198,15 @@ def evolve(
 
     # ── 7. Validate evolved skill ───────────────────────────────────────
     console.print(f"\n[bold]Validating evolved skill[/bold]")
+    # Body-only checks (size/growth); structure must use the reassembled
+    # full file because frontmatter lives outside the optimizable body.
     evolved_constraints = validator.validate_all(evolved_body, "skill", baseline_text=skill["body"])
+    evolved_constraints = [
+        validator._check_skill_structure(evolved_full)
+        if c.constraint_name == "skill_structure"
+        else c
+        for c in evolved_constraints
+    ]
     all_pass = True
     for c in evolved_constraints:
         icon = "✓" if c.passed else "✗"

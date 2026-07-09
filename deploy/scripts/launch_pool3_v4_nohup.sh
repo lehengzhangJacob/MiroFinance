@@ -2,7 +2,7 @@
 # Rerun pool3 MemSkill arm with direction-collapse fixes (ashare_v4 namespace).
 # Output goes to logs/ashare_pool3_v4_kimi so the v3 run stays intact.
 set -u
-AGENT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+AGENT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 KEY=$(grep -oP '(?<=KIMI_API_KEY=).*' "$AGENT_ROOT/llm_key")
 
 # Kimi (moonshot.cn) is domestic; SOCKS proxy from BASH_ENV breaks httpx.
@@ -16,12 +16,12 @@ export REFLECTION_LLM_API_KEY="$KEY"
 export REFLECTION_LLM_BASE_URL="https://api.moonshot.cn/v1"
 export REFLECTION_LLM_MODEL_NAME="moonshot-v1-32k"
 
-LOG_DIR="$AGENT_ROOT/logs/nohup_pool3"
+LOG_DIR="$AGENT_ROOT/deploy/logs/nohup_pool3"
 mkdir -p "$LOG_DIR"
 
 PYTHON="/home/msj_team/.conda/envs/Miro/bin/python"
 if [ ! -x "$PYTHON" ]; then
-  echo "Miro conda env not found. Run: $AGENT_ROOT/conda/setup_miro.sh" >&2
+  echo "Miro conda env not found. Run: $AGENT_ROOT/deploy/conda/setup_miro.sh" >&2
   exit 1
 fi
 

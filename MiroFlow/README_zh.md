@@ -72,7 +72,7 @@
 
 ```bash
 # 在 agent 仓库根目录
-./conda/setup_miro.sh
+./deploy/conda/setup_miro.sh
 conda activate Miro
 cd MiroFlow && python main.py --help
 ```
