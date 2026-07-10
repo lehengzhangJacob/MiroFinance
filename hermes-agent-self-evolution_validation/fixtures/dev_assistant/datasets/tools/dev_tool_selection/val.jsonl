@@ -1,0 +1,4 @@
+{"task_input": "What files did I modify locally? Show the patch.", "expected_behavior": "read_git_diff", "difficulty": "easy", "category": "git"}
+{"task_input": "Locate string TODO migrate database in all Python files.", "expected_behavior": "search_repo", "difficulty": "medium", "category": "search"}
+{"task_input": "Run unit tests after my edit to payments service.", "expected_behavior": "run_unit_tests", "difficulty": "easy", "category": "test"}
+{"task_input": "Format this minified JSON for readability.", "expected_behavior": "format_json", "difficulty": "easy", "category": "json"}

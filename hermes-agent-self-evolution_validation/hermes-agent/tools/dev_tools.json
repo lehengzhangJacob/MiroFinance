@@ -1,0 +1,20 @@
+{
+  "tools": [
+    {
+      "name": "read_git_diff",
+      "description": "Read file contents from the repository or working tree."
+    },
+    {
+      "name": "search_repo",
+      "description": "Search for text in the codebase."
+    },
+    {
+      "name": "run_unit_tests",
+      "description": "Run tests and show results."
+    },
+    {
+      "name": "format_json",
+      "description": "Edit or transform file content in the project."
+    }
+  ]
+}

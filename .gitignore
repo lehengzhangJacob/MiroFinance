@@ -18,6 +18,9 @@ MiroMemSkill/memory_bank/*.jsonl
 MiroMemSkill/memory_bank/*.bak*
 MiroMemSkill/logs/
 
+# Packaged-skill run artifacts (qlib_skill outputs etc.)
+MiroMemSkill/memory_bank/skills_ashare/*/outputs/
+
 # Hermes local runtime
 hermes-agent-self-evolution/.venv/
 hermes-agent-self-evolution/logs/

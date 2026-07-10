@@ -1,0 +1,3 @@
+{"task_input": "Diff: security patch for XSS in comment renderer views/comments.js", "expected_behavior": "fix(comments): patch XSS in comment renderer. Conventional Commit, no period on subject.", "difficulty": "medium", "category": "fix"}
+{"task_input": "Diff: reorganize imports across project with isort, no logic changes", "expected_behavior": "style: reorganize imports with isort. Or chore(style). Subject <= 72 chars.", "difficulty": "easy", "category": "style"}
+{"task_input": "Diff: implement rate limiting middleware using token bucket", "expected_behavior": "feat(middleware): implement token bucket rate limiting. Body bullets for config notes if needed.", "difficulty": "hard", "category": "feat"}

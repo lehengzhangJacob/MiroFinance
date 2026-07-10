@@ -1,0 +1,4 @@
+{"task_input": "Diff: new dark mode toggle in settings UI components/Settings.tsx", "expected_behavior": "feat(ui) or feat(settings): add dark mode toggle. Conventional Commit, subject <= 72, no trailing period.", "difficulty": "medium", "category": "feat"}
+{"task_input": "Diff: typo fix in error message strings i18n/en.json", "expected_behavior": "fix(i18n): correct error message typo. Short subject, conventional format.", "difficulty": "easy", "category": "fix"}
+{"task_input": "Diff: extract shared validation helpers to lib/validate.py from three handlers", "expected_behavior": "refactor: extract validation helpers to lib/validate. Body may list affected handlers as dash bullets.", "difficulty": "hard", "category": "refactor"}
+{"task_input": "Diff: add unit tests for payment webhook parser tests/payments/", "expected_behavior": "test(payments): add webhook parser unit tests. Type test allowed or feat with test focus.", "difficulty": "medium", "category": "test"}

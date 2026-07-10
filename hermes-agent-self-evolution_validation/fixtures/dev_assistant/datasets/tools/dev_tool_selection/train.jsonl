@@ -1,0 +1,8 @@
+{"task_input": "Show me what changed in my staged files before I commit.", "expected_behavior": "Agent selects read_git_diff.", "difficulty": "easy", "category": "git"}
+{"task_input": "Find all usages of deprecated function parse_config in the repo.", "expected_behavior": "Agent selects search_repo.", "difficulty": "medium", "category": "search"}
+{"task_input": "Run pytest for the auth module and tell me if anything failed.", "expected_behavior": "Agent selects run_unit_tests.", "difficulty": "easy", "category": "test"}
+{"task_input": "Pretty-print this JSON config so I can review it: {\"retries\":3}", "expected_behavior": "Agent selects format_json.", "difficulty": "easy", "category": "json"}
+{"task_input": "I need to see the diff between my branch and main for src/api/.", "expected_behavior": "Agent selects read_git_diff not read_file.", "difficulty": "medium", "category": "git"}
+{"task_input": "Search for regex pattern `class.*Factory` under src/models only.", "expected_behavior": "Agent selects search_repo.", "difficulty": "hard", "category": "search"}
+{"task_input": "Execute the test suite in the project root with a 60s timeout.", "expected_behavior": "Agent selects run_unit_tests.", "difficulty": "medium", "category": "test"}
+{"task_input": "Validate and indent this JSON payload from the API response.", "expected_behavior": "Agent selects format_json not generic file edit.", "difficulty": "medium", "category": "json"}

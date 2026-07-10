@@ -1,0 +1,3 @@
+{"task_input": "Display unstaged diff for README.md only.", "expected_behavior": "read_git_diff", "difficulty": "medium", "category": "git"}
+{"task_input": "Grep for function name handle_webhook across the codebase.", "expected_behavior": "search_repo", "difficulty": "easy", "category": "search"}
+{"task_input": "Run pytest -q and summarize failures.", "expected_behavior": "run_unit_tests", "difficulty": "medium", "category": "test"}

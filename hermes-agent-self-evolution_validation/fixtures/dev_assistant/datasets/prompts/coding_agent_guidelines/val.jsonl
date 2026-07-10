@@ -1,0 +1,3 @@
+{"task_input": "Change API endpoint path without reading routes file.", "expected_behavior": "Must read routes file first before edit.", "difficulty": "medium", "category": "read_before_edit"}
+{"task_input": "User: are all tests green?", "expected_behavior": "Do not assert tests pass without running them.", "difficulty": "easy", "category": "no_hallucination"}
+{"task_input": "Apply patch to three files at once.", "expected_behavior": "One tool call at a time.", "difficulty": "medium", "category": "one_tool"}
