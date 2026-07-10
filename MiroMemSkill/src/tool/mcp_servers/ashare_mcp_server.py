@@ -164,6 +164,40 @@ def ashare_valuation(ts_code: str, as_of: str, lookback_days: int = 120) -> str:
 
 
 @mcp.tool()
+def ashare_ml_signal(ts_code: str, as_of: str) -> str:
+    """Get the point-in-time qlib ML score (LightGBM+Alpha158, walk-forward) for one stock.
+
+    Scores are cross-sectionally comparable within the same month: rank 1 means
+    the highest predicted 20-day forward return in the pool. Each monthly score
+    comes from a model trained ONLY on data whose labels settled before that
+    month's decision date, so no future information is embedded. Rows after
+    as_of are never returned.
+
+    Args:
+        ts_code: Stock code like 600519.SH.
+        as_of: Point-in-time cutoff date (YYYY-MM-DD).
+    """
+    try:
+        df = _load_csv("qlib_signal.csv")
+    except FileNotFoundError:
+        return "ML signal unavailable (qlib_signal.csv not built; see qlib_skill walkforward)."
+    df = df[df["entry_date"].astype(str) <= _norm_date(as_of)]
+    df = df[df["ts_code"] == ts_code]
+    if df.empty:
+        return f"No ML signal for {ts_code} on or before {as_of}."
+    tail = df.sort_values("entry_date").tail(6)
+    latest = tail.iloc[-1]
+    out = [
+        f"# {ts_code} qlib机器学习信号 (LightGBM+Alpha158, 逐月walk-forward训练), 截至 {as_of}",
+        f"最新: 决策日 {latest['entry_date']}, score={latest['score']:.4f}, "
+        f"池内排名 {int(latest['rank'])}/{int(latest['n_stocks'])} (rank 1 = 预测未来20日收益最高)",
+        "## 最近月度信号 (CSV)",
+        tail[["entry_date", "score", "rank", "n_stocks"]].to_csv(index=False),
+    ]
+    return "\n".join(out)
+
+
+@mcp.tool()
 def ashare_financials(ts_code: str, as_of: str) -> str:
     """Get financial indicators from reports ANNOUNCED on or before as_of (point-in-time safe).
 

@@ -30,19 +30,19 @@ TUSHARE_API = "http://api.tushare.pro"
 START_DATE = "20230101"
 END_DATE = "20250731"
 
-# Pool v3 (2026-07-09). Ex-ante rule, formation date 2024-06-28:
-#   - 12 stocks, 8 industries, main/ChiNext/STAR mix;
-#   - 4 CSI300 (33%) for index generalizability + 8 non-index mid-caps;
-#   - 6 prior losers + 6 prior winners by 2024H1 excess vs CSI300;
-#   - no overlap with pool v1 mega-caps (茅台/宁德/招行/比亚迪/长电/海控).
+# Pool v4 (2026-07-10) = pool v3 + 4 strong 2024H2-2025H1 outperformers.
+# Pool v3 as a whole trailed CSI300 over 2024-07..2025-06, skewing labels to
+# 63 跑赢 / 81 跑输 (majority class 56.25%). The 4 additions each beat the
+# index in 8-9 of the 12 monthly 20-trading-day windows, bringing the total
+# label balance to ~97/95 (majority ~50.5%) without changing the label rule.
 # Pool v2 (6 stocks) archived in meta_pool2.json.
 STOCK_POOL: dict[str, dict[str, str]] = {
-    # --- CSI300 minority (4) ---
+    # --- pool v3: CSI300 minority (4) ---
     "603259.SH": {"name": "药明康德", "industry": "医药外包"},
     "002415.SZ": {"name": "海康威视", "industry": "安防"},
     "601899.SH": {"name": "紫金矿业", "industry": "有色金属"},
     "601021.SH": {"name": "春秋航空", "industry": "航空"},
-    # --- non-CSI300 majority (8) ---
+    # --- pool v3: non-CSI300 majority (8) ---
     "300012.SZ": {"name": "华测检测", "industry": "检测服务"},
     "688005.SH": {"name": "容百科技", "industry": "锂电材料"},
     "603345.SH": {"name": "安井食品", "industry": "速冻食品"},
@@ -51,6 +51,11 @@ STOCK_POOL: dict[str, dict[str, str]] = {
     "002508.SZ": {"name": "老板电器", "industry": "厨电"},
     "601233.SH": {"name": "桐昆股份", "industry": "化纤"},
     "688169.SH": {"name": "石头科技", "industry": "智能清洁电器"},
+    # --- pool v4 additions: typical 2024H2-2025H1 outperformers (4) ---
+    "688981.SH": {"name": "中芯国际", "industry": "晶圆代工"},
+    "300476.SZ": {"name": "胜宏科技", "industry": "PCB"},
+    "002371.SZ": {"name": "北方华创", "industry": "半导体设备"},
+    "600418.SH": {"name": "江淮汽车", "industry": "汽车"},
 }
 INDEX_CODE = "000300.SH"  # CSI 300
 

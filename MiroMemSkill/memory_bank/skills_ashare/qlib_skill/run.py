@@ -211,6 +211,118 @@ def cmd_predict(args: argparse.Namespace, cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# walkforward: monthly point-in-time scores for the agent benchmark
+# ---------------------------------------------------------------------------
+
+
+def _from_qlib_code(code: str) -> str:
+    """SH600418 -> 600418.SH."""
+    return f"{code[2:]}.{code[:2]}"
+
+
+def cmd_walkforward(args: argparse.Namespace, cfg: dict) -> None:
+    """One LGBM+Alpha158 model per monthly decision date.
+
+    Each month's model trains ONLY on rows whose 20-trading-day labels are
+    fully settled before that decision date, then scores the pool at the
+    decision date. Output feeds the `ashare_ml_signal` MCP tool, giving the
+    agent a leakage-free cross-sectional ML signal per task.
+    """
+    init_qlib(cfg)
+    from qlib.contrib.data.handler import Alpha158
+    from qlib.contrib.model.gbdt import LGBModel
+    from qlib.data.dataset import DatasetH
+
+    exp = cfg["experiment"]
+    horizon = int(exp["label_horizon"])
+    train_start = exp["segments"]["train"][0]
+    cache = Path(cfg["data"]["csv_cache_dir"])
+
+    cal = pd.read_csv(cache / "trade_cal.csv", dtype={"cal_date": str})
+    days = cal[cal["is_open"].astype(int) == 1]["cal_date"].sort_values().tolist()
+
+    def iso(d: str) -> str:
+        return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+
+    lo = args.start_month.replace("-", "")
+    hi = args.end_month.replace("-", "")
+    firsts: dict[str, str] = {}
+    for d in days:
+        firsts.setdefault(d[:6], d)
+    rebalances = [d for m, d in sorted(firsts.items()) if lo <= m <= hi]
+    if not rebalances:
+        sys.exit(f"no monthly decision dates in {args.start_month}..{args.end_month}")
+
+    lgbm = exp["lgbm"]
+    train_start_compact = train_start.replace("-", "")
+    train_start_i = next(i for i, d in enumerate(days) if d >= train_start_compact)
+    rows: list[dict] = []
+    for day in rebalances:
+        di = days.index(day)
+        # Last row whose label close[T+h+1] settles strictly before `day`.
+        label_end_i = di - (horizon + 1)
+        valid_split_i = label_end_i - 60
+        if valid_split_i <= train_start_i + 80:
+            print(f"skip {day}: not enough history for train/valid")
+            continue
+        segments = {
+            "train": (train_start, iso(days[valid_split_i])),
+            "valid": (iso(days[valid_split_i + 1]), iso(days[label_end_i])),
+            "test": (iso(day), iso(day)),
+        }
+        handler = Alpha158(
+            instruments="all",
+            start_time=train_start,
+            end_time=iso(day),  # never sees data past the decision date
+            fit_start_time=segments["train"][0],
+            fit_end_time=segments["train"][1],
+            label=([label_expression(horizon)], ["LABEL0"]),
+        )
+        dataset = DatasetH(handler, segments=segments)
+        model = LGBModel(
+            loss=lgbm.get("loss", "mse"),
+            num_boost_round=int(lgbm.get("num_boost_round", 200)),
+            early_stopping_rounds=int(lgbm.get("early_stopping_rounds", 30)),
+            learning_rate=float(lgbm.get("learning_rate", 0.05)),
+            max_depth=int(lgbm.get("max_depth", 6)),
+            num_leaves=int(lgbm.get("num_leaves", 31)),
+            seed=int(lgbm.get("seed", 42)),
+        )
+        model.fit(dataset)
+        pred = model.predict(dataset, segment="test").rename("score").dropna()
+        if pred.empty:
+            print(f"skip {day}: empty prediction")
+            continue
+        day_scores = pred.xs(pred.index.get_level_values(0)[0], level=0)
+        ranked = day_scores.sort_values(ascending=False)
+        n = len(ranked)
+        for rank, (inst, score) in enumerate(ranked.items(), start=1):
+            rows.append(
+                {
+                    "entry_date": day,
+                    "month": f"{day[:4]}-{day[4:6]}",
+                    "ts_code": _from_qlib_code(str(inst)),
+                    "qlib_code": str(inst),
+                    "score": round(float(score), 6),
+                    "rank": rank,
+                    "n_stocks": n,
+                }
+            )
+        print(f"  {day}: scored {n} stocks (train <= {segments['valid'][1]})")
+
+    out_path = Path(args.out) if args.out else cache / "qlib_signal.csv"
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+    print_envelope(
+        envelope(
+            "walkforward",
+            {"start_month": args.start_month, "end_month": args.end_month},
+            {"months": len(rebalances), "rows": len(rows)},
+            out=str(out_path),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # signal (plain pandas; no qlib import needed)
 # ---------------------------------------------------------------------------
 
@@ -407,6 +519,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start", required=True, help="window start YYYY-MM-DD")
     p.add_argument("--end", required=True, help="window end YYYY-MM-DD")
     p.set_defaults(func=cmd_predict)
+
+    p = sub.add_parser(
+        "walkforward",
+        help="monthly point-in-time scores -> qlib_signal.csv (ashare_ml_signal tool)",
+    )
+    p.add_argument("--start-month", default="2024-07", help="first decision month YYYY-MM")
+    p.add_argument("--end-month", default="2025-06", help="last decision month YYYY-MM")
+    p.add_argument("--out", default=None, help="output CSV (default: <csv_cache_dir>/qlib_signal.csv)")
+    p.set_defaults(func=cmd_walkforward)
 
     p = sub.add_parser("signal", help="IC / RankIC / ICIR from saved pred+label")
     p.add_argument("--run-name", default="default")

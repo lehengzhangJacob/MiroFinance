@@ -84,6 +84,16 @@ def build_memory_context_block(
                     "### Top Skill Preview\n"
                     + skill_lib.load_skill_text(top_skill.name)[:1500]
                 )
+        # Keyword matching misses skills whose triggers don't appear in the
+        # task text (e.g. qlib/tushare utility skills), leaving them invisible
+        # and unused. Always list the rest so the agent can skill_load them.
+        matched_names = {s.name for s, _ in matches}
+        others = [s for s in skill_lib.list_skills() if s["name"] not in matched_names]
+        if others:
+            sections.append(
+                "### Other Available Skills (load with skill_load(name))\n"
+                + "\n".join(f"- **{s['name']}**: {s['description']}" for s in others)
+            )
 
     if not sections:
         return ""

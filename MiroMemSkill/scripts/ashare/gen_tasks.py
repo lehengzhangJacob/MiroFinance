@@ -35,7 +35,7 @@ QUESTION_TEMPLATE = """\
 请基于截至 {as_of}（含当日收盘数据）的信息，预测股票 {name}（{ts_code}，{industry}行业）从 {as_of} 收盘价买入、持有 {horizon} 个交易日后（按收盘价计算、前复权口径），其区间收益率相对沪深300指数（000300.SH）同期收益率是「跑赢」还是「跑输」。
 
 数据使用规则（务必遵守）：
-- 只能使用 ashare-market 工具集（ashare_price_history、ashare_index_history、ashare_valuation、ashare_financials、ashare_stock_info）获取数据，调用时 as_of 参数必须设为 {as_of_compact}；
+- 只能使用 ashare-market 工具集（ashare_price_history、ashare_index_history、ashare_valuation、ashare_financials、ashare_ml_signal、ashare_stock_info）获取数据，调用时 as_of 参数必须设为 {as_of_compact}；
 - 禁止使用任何网络搜索或你记忆中 {as_of} 之后的市场信息（如后续涨跌、新闻、财报），这是一个严格的点时（point-in-time）预测任务；
 - 建议综合考察：近期动量与波动（如 20/60 日相对指数表现）、估值水平（PE/PB 历史分位）、最近一期已公告财务指标（注意公告日期必须早于 {as_of}）、成交与换手变化。
 

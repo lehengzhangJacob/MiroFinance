@@ -133,11 +133,21 @@ def convert(
     features_dir = dst / "features"
     instruments: list[str] = []
     # Strictly daily_<code>.csv — the cache also holds daily_basic_*.csv
-    # (valuation) files which are not bar data.
+    # (valuation) files which are not bar data. The cache may also keep CSVs
+    # of retired pool members; meta.json's stock_pool is the source of truth
+    # for the current universe, so ranks/cross-sections match the benchmark.
     stock_re = re.compile(r"^daily_(\d{6}\.(?:SH|SZ|BJ))$")
+    pool: set[str] | None = None
+    meta_path = src / "meta.json"
+    if meta_path.exists():
+        import json as _json
+
+        pool = set(_json.loads(meta_path.read_text(encoding="utf-8"))["stock_pool"])
     stocks = sorted(p for p in src.glob("daily_*.csv") if stock_re.match(p.stem))
     for path in stocks:
         ts_code = stock_re.match(path.stem).group(1)
+        if pool is not None and ts_code not in pool:
+            continue
         code = to_qlib_code(ts_code)
         df = pd.read_csv(path, dtype={"trade_date": str})
         start, end = _write_bins(features_dir, code, _stock_frame(df), calendar)
