@@ -16,12 +16,18 @@ deploy/logs/
 # MiroMemSkill runtime memory (skills/*.md and skills_ashare/*.md stay tracked)
 MiroMemSkill/memory_bank/*.jsonl
 MiroMemSkill/memory_bank/*.bak*
+MiroMemSkill/memory_bank/*.lock
 MiroMemSkill/logs/
 
 # Packaged-skill run artifacts (qlib_skill outputs etc.)
 MiroMemSkill/memory_bank/skills_ashare/*/outputs/
 
-# Hermes local runtime
+# External reference clones / separate remotes (do not nest in MiroFinance)
+Mem0/
+report/
+
+# Hermes validation runtime logs
+hermes-agent-self-evolution_validation/logs/
 hermes-agent-self-evolution/.venv/
 hermes-agent-self-evolution/logs/
 hermes-agent-self-evolution/output/

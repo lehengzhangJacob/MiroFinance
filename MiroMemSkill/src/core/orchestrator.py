@@ -797,6 +797,9 @@ Your objective is maximum completeness, transparency, and detailed documentation
                         skill_preview_min_score=float(
                             self.cfg.memory.get("skill_preview_min_score", 0.0)
                         ),
+                        calibration_enabled=bool(
+                            self.cfg.memory.get("calibration_enabled", False)
+                        ),
                     )
                     if memory_block:
                         original_text = initial_user_content[0]["text"]

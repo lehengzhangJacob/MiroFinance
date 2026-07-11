@@ -1,0 +1,14 @@
+# Mem0-style rebuild (extract->consolidate pipeline, mandatory embeddings,
+# before_month temporal filter). Fresh namespace: ashare_poolv4 and older
+# banks were written by the retired store/reflection implementation.
+enabled: true
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_mem0"
+inject_top_k: 3
+skill_top_k: 3
+skill_enabled: true
+reflection_enabled: true
+embedding_model: "embedding-3"
+inject_enabled: true
+skill_preview_min_score: 2.0

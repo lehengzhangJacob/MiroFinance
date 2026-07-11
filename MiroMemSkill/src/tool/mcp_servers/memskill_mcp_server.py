@@ -5,14 +5,13 @@
 """MCP server exposing memory and skill tools for agent reasoning."""
 
 import os
-import sys
-from pathlib import Path
 
 from fastmcp import FastMCP
 
 from src.logging.logger import setup_mcp_logging
+from src.memory.memory import Mem0Memory
 from src.memory.skills import SkillLibrary
-from src.memory.store import MemoryStore
+from src.memory.vector_store import VectorStore
 
 setup_mcp_logging(tool_name=os.path.basename(__file__))
 mcp = FastMCP("memskill-mcp-server")
@@ -21,15 +20,15 @@ _STORE_DIR = os.environ.get("MEMSKILL_STORE_DIR", "memory_bank")
 _NAMESPACE = os.environ.get("MEMSKILL_NAMESPACE", "default")
 _SKILLS_DIR = os.environ.get("MEMSKILL_SKILLS_DIR", f"{_STORE_DIR}/skills")
 
-_store: MemoryStore | None = None
+_memory: Mem0Memory | None = None
 _skills: SkillLibrary | None = None
 
 
-def _get_store() -> MemoryStore:
-    global _store
-    if _store is None:
-        _store = MemoryStore(store_dir=_STORE_DIR, namespace=_NAMESPACE)
-    return _store
+def _get_memory() -> Mem0Memory:
+    global _memory
+    if _memory is None:
+        _memory = Mem0Memory(store=VectorStore(store_dir=_STORE_DIR, namespace=_NAMESPACE))
+    return _memory
 
 
 def _get_skills() -> SkillLibrary:
@@ -40,33 +39,41 @@ def _get_skills() -> SkillLibrary:
 
 
 @mcp.tool()
-def memory_search(query: str, top_k: int = 5) -> str:
-    """Search episodic and semantic memory for relevant past experiences and notes.
+def memory_search(query: str, top_k: int = 5, before_month: str = "") -> str:
+    """Search stored past experiences and notes for relevant lessons.
 
     Args:
         query: Natural language search query.
         top_k: Maximum number of results to return (default 5).
+        before_month: Point-in-time guard, format YYYY-MM. For prediction tasks
+            ALWAYS pass the task's current month so only lessons learned from
+            strictly earlier market months are returned (avoids look-ahead).
     """
-    store = _get_store()
-    results = store.search(query, top_k=top_k)
-    return store.format_search_results(results)
+    try:
+        memory = _get_memory()
+        results = memory.search(query, top_k=top_k, before_month=before_month)
+        return memory.format_results(results)
+    except Exception as exc:
+        return f"Memory search unavailable: {exc}"
 
 
 @mcp.tool()
-def memory_save(content: str, tags: str = "", kind: str = "semantic") -> str:
-    """Save a note or fact to memory for future retrieval.
+def memory_save(content: str, tags: str = "", as_of_month: str = "") -> str:
+    """Save a reusable note or heuristic to memory for future tasks.
 
     Args:
-        content: The note content to store (strategy, source URL, fact — not full answers).
-        tags: Comma-separated tags, e.g. "finance,source,china".
-        kind: Memory type: "semantic" (facts/notes) or "episodic" (experiences).
+        content: The note content (strategy/heuristic/source — not full answers).
+        tags: Comma-separated tags, e.g. "momentum,valuation".
+        as_of_month: The market month (YYYY-MM) this note is based on. Required
+            for the note to be retrievable in point-in-time filtered searches.
     """
-    store = _get_store()
-    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-    if kind not in ("semantic", "episodic"):
-        kind = "semantic"
-    entry = store.add(content=content, kind=kind, tags=tag_list)
-    return f"Saved memory entry id={entry.id} kind={entry.kind} tags={tag_list}"
+    try:
+        memory = _get_memory()
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        rec = memory.save_note(content, tags=tag_list, as_of_month=as_of_month)
+        return f"Saved memory id={rec.id} tags={tag_list} as_of_month={as_of_month or 'unset'}"
+    except Exception as exc:
+        return f"Memory save failed: {exc}"
 
 
 @mcp.tool()

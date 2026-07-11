@@ -22,7 +22,8 @@ from src.utils.env_loader import load_project_env
 
 from utils.eval_utils import verify_answer_for_datasets
 from src.memory.context import get_memory_components
-from src.memory.reflection import MemoryReflector
+from src.memory.memory import extract_direction, parse_task_month
+from src.memory.monthly_reflection import compute_month_features
 from src.logging.logger import (
     bootstrap_logger,
     task_logging_context,
@@ -280,7 +281,7 @@ class BenchmarkEvaluator(ABC):
                                 f"    ❌ Attempt {attempt}: INCORRECT ({evaluation_result})"
                             )
 
-                        await self._run_post_task_reflection(
+                        await self._run_post_judge_hooks(
                             task=task,
                             attempt_result=attempt_result,
                             evaluation_result=evaluation_result,
@@ -397,15 +398,42 @@ class BenchmarkEvaluator(ABC):
                     result = await self.run_single_task(task)
                 return result
 
-        # Shuffle tasks to avoid order bias and improve balancing
-        shuffled_tasks = tasks.copy()
-        random.shuffle(shuffled_tasks)
-
-        # Run tasks in parallel
-        results = await asyncio.gather(
-            *[run_with_semaphore(task) for task in shuffled_tasks],
-            return_exceptions=True,
+        # Task ordering:
+        #   "shuffle" (default) avoids order bias;
+        #   "sorted"  runs chronologically without barriers;
+        #   "monthly" runs chronologically WITH a barrier between entry months —
+        #     month M fully finishes (inference + judge) before M+1 starts, so
+        #     monthly cross-sectional reflection and the calibration ledger see
+        #     complete, settled months only (exact walk-forward semantics).
+        task_order = str(
+            OmegaConf.select(self.cfg, "benchmark.execution.task_order") or "shuffle"
         )
+        if task_order == "monthly":
+            groups: Dict[str, List[BenchmarkTask]] = {}
+            for t in tasks:
+                groups.setdefault(parse_task_month(t.task_id) or "unknown", []).append(t)
+            shuffled_tasks = []
+            results = []
+            for month in sorted(groups):
+                month_tasks = sorted(groups[month], key=lambda t: t.task_id)
+                print(f"\n=== month {month}: {len(month_tasks)} tasks ===")
+                shuffled_tasks.extend(month_tasks)
+                month_results = await asyncio.gather(
+                    *[run_with_semaphore(task) for task in month_tasks],
+                    return_exceptions=True,
+                )
+                results.extend(month_results)
+                await self._run_monthly_reflection(month, month_tasks, month_results)
+        else:
+            shuffled_tasks = tasks.copy()
+            if task_order == "sorted":
+                shuffled_tasks.sort(key=lambda t: (t.task_id.rsplit("_", 1)[-1], t.task_id))
+            else:
+                random.shuffle(shuffled_tasks)
+            results = await asyncio.gather(
+                *[run_with_semaphore(task) for task in shuffled_tasks],
+                return_exceptions=True,
+            )
 
         # Handle exceptions
         processed_results = []
@@ -500,20 +528,45 @@ class BenchmarkEvaluator(ABC):
 
         return pass_at_k_accuracy
 
-    async def _run_post_task_reflection(
+    async def _run_post_judge_hooks(
         self,
         task: "BenchmarkTask",
         attempt_result: dict,
         evaluation_result: str,
     ) -> None:
-        """Distill strategy lessons into memory after judging."""
-        if not self.cfg.get("memory") or not self.cfg.memory.get("reflection_enabled", False):
+        """After judging: append the calibration ledger, then route reflection.
+
+        reflection_mode "per_task" keeps the Mem0 per-task extraction (kept as
+        an ablation arm); "monthly" defers learning to the month barrier in
+        run_parallel_inference (nothing per-task beyond the ledger).
+        """
+        if not self.cfg.get("memory") or not self.cfg.memory.get("enabled", False):
             return
         if evaluation_result not in ("CORRECT", "INCORRECT"):
             return
 
-        store, _ = get_memory_components(self.cfg)
-        if not store:
+        try:
+            memory, _ = get_memory_components(self.cfg)
+        except Exception as e:
+            print(f"    Memory unavailable after judge: {e}")
+            return
+        if not memory:
+            return
+
+        answer = attempt_result.get("model_boxed_answer", "")
+        try:
+            memory.log_outcome(
+                task_id=task.task_id,
+                month=parse_task_month(task.task_id),
+                predicted=extract_direction(answer),
+                judge_result=evaluation_result,
+            )
+        except Exception as e:
+            print(f"    Outcome ledger write failed: {e}")
+
+        if not self.cfg.memory.get("reflection_enabled", False):
+            return
+        if str(self.cfg.memory.get("reflection_mode", "per_task")) != "per_task":
             return
 
         log_path = attempt_result.get("log_file_path")
@@ -525,19 +578,100 @@ class BenchmarkEvaluator(ABC):
             except Exception:
                 pass
 
-        reflector = MemoryReflector(store=store)
         try:
-            lessons = reflector.reflect_and_store(
+            ops = memory.add(
                 question=task.task_question,
-                answer=attempt_result.get("model_boxed_answer", ""),
+                answer=answer,
                 judge_result=evaluation_result,
                 log_data=log_data,
                 task_id=task.task_id,
+                ts_code=(task.metadata or {}).get("ts_code", ""),
             )
-            if lessons:
-                print(f"    📝 Stored {len(lessons)} reflection lesson(s) to memory.")
+            for op in ops:
+                print(f"    📝 memory {op}")
         except Exception as e:
             print(f"    Reflection failed: {e}")
+
+    async def _run_monthly_reflection(
+        self,
+        month: str,
+        month_tasks: List["BenchmarkTask"],
+        month_results: list,
+    ) -> None:
+        """Month-barrier hook: cross-sectional reflection over the settled month."""
+        if not self.cfg.get("memory") or not self.cfg.memory.get("enabled", False):
+            return
+        if not self.cfg.memory.get("reflection_enabled", False):
+            return
+        if str(self.cfg.memory.get("reflection_mode", "per_task")) != "monthly":
+            return
+
+        try:
+            memory, _ = get_memory_components(self.cfg)
+        except Exception as e:
+            print(f"    Memory unavailable for monthly reflection: {e}")
+            return
+        if not memory:
+            return
+
+        tasks_by_id = {t.task_id: t for t in month_tasks}
+        stocks: list[dict] = []
+        entry_date = ""
+        for result in month_results:
+            if isinstance(result, Exception) or not getattr(result, "attempts", None):
+                continue
+            task = tasks_by_id.get(result.task_id)
+            if task is None:
+                continue
+            judged = next(
+                (a for a in result.attempts if a.get("judge_result") in ("CORRECT", "INCORRECT")),
+                None,
+            )
+            if judged is None:
+                continue
+            meta = task.metadata or {}
+            entry_date = meta.get("entry_date", entry_date)
+            predicted = extract_direction(judged.get("model_boxed_answer", ""))
+            stocks.append(
+                {
+                    "ts_code": meta.get("ts_code", ""),
+                    "stock_name": meta.get("stock_name", ""),
+                    "label": task.ground_truth,
+                    "predicted": predicted,
+                    "judge_result": judged["judge_result"],
+                }
+            )
+            # Backfill the ledger for cached/resumed tasks that skipped the
+            # live post-judge hook (log_outcome dedupes by task_id).
+            try:
+                memory.log_outcome(
+                    task_id=result.task_id,
+                    month=month,
+                    predicted=predicted,
+                    judge_result=judged["judge_result"],
+                )
+            except Exception:
+                pass
+
+        if len(stocks) < 4 or not entry_date:
+            print(f"    [monthly {month}] only {len(stocks)} judged tasks — reflection skipped")
+            return
+
+        try:
+            features_csv, n = compute_month_features(entry_date, stocks)
+        except Exception as e:
+            print(f"    [monthly {month}] feature table failed: {e}")
+            return
+
+        try:
+            ops = memory.add_monthly(month, features_csv, n)
+            if ops:
+                for op in ops:
+                    print(f"    📅 monthly[{month}] {op}")
+            else:
+                print(f"    📅 monthly[{month}] no clear cross-sectional pattern stored")
+        except Exception as e:
+            print(f"    [monthly {month}] reflection failed: {e}")
 
     async def _update_log_file_with_evaluation(
         self, log_file_path: Path, evaluation_result: str

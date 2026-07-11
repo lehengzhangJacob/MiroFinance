@@ -149,6 +149,17 @@ def momentum_rule(tasks: pd.DataFrame) -> pd.Series:
     return pd.Series(preds)
 
 
+def _wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson 95% score interval for a binomial proportion (as percentages)."""
+    if n == 0:
+        return float("nan"), float("nan")
+    p = k / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z / denom * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return round((center - half) * 100, 1), round((center + half) * 100, 1)
+
+
 def _cum(series: pd.Series) -> float:
     return (1 + series).prod() - 1
 
@@ -186,11 +197,14 @@ def evaluate(name: str, merged: pd.DataFrame) -> dict:
     dd = ((nav - nav.cummax()) / nav.cummax()).min() if len(nav) else float("nan")
 
     picked = merged[merged.prediction == OUTPERFORM]
+    n_hits = int((valid.prediction == valid.label).sum()) if len(valid) else 0
+    ci_lo, ci_hi = _wilson_ci(n_hits, len(valid))
     return {
         "run": name,
         "n_tasks": n,
         "n_valid_pred": len(valid),
         "hit_rate": round(hit * 100, 1),
+        "hit_ci": f"[{ci_lo},{ci_hi}]" if len(valid) else "-",
         "mean_excess_of_picks": round(picked.excess_return.mean() * 100, 2) if len(picked) else float("nan"),
         "cum_excess": round(_cum(monthly) * 100, 2),
         "ann_sharpe": round(_sharpe(monthly), 2) if not math.isnan(_sharpe(monthly)) else float("nan"),
@@ -234,11 +248,15 @@ def main() -> None:
         rng = random.Random(seed)
         rnd["prediction"] = [rng.choice([OUTPERFORM, UNDERPERFORM]) for _ in range(len(rnd))]
         sims.append(evaluate("", rnd))
+    avg_hit = round(sum(s["hit_rate"] for s in sims) / n_sims, 1)
+    avg_n = sims[0]["n_valid_pred"]
+    avg_ci = _wilson_ci(round(avg_hit / 100 * avg_n), avg_n)
     avg = {
         "run": f"random(随机,{n_sims}次均值)",
         "n_tasks": sims[0]["n_tasks"],
-        "n_valid_pred": sims[0]["n_valid_pred"],
-        "hit_rate": round(sum(s["hit_rate"] for s in sims) / n_sims, 1),
+        "n_valid_pred": avg_n,
+        "hit_rate": avg_hit,
+        "hit_ci": f"[{avg_ci[0]},{avg_ci[1]}]",
         "mean_excess_of_picks": round(sum(s["mean_excess_of_picks"] for s in sims) / n_sims, 2),
         "cum_excess": round(sum(s["cum_excess"] for s in sims) / n_sims, 2),
         "ann_sharpe": round(sum(s["ann_sharpe"] for s in sims) / n_sims, 2),
@@ -270,12 +288,12 @@ def main() -> None:
         "多空对冲(LS) = 做多预测「跑赢」腿 - 做空预测「跑输」腿(等权)。",
         "无选股信息的策略(如全做多)缺少空头腿, LS 记 0, 因此该列只衡量真实的个股区分能力。",
         "",
-        "| 运行 | 预测数 | 方向命中率% | 入选组合平均超额% | 多头累计超额% | 多头夏普 | 最大回撤% | LS累计% | LS夏普 |",
-        "|------|--------|------------|------------------|--------------|----------|-----------|---------|--------|",
+        "| 运行 | 预测数 | 方向命中率% | 命中率95%CI | 入选组合平均超额% | 多头累计超额% | 多头夏普 | 最大回撤% | LS累计% | LS夏普 |",
+        "|------|--------|------------|-------------|------------------|--------------|----------|-----------|---------|--------|",
     ]
     for r in results:
         lines.append(
-            f"| {r['run']} | {r['n_valid_pred']}/{r['n_tasks']} | {r['hit_rate']} "
+            f"| {r['run']} | {r['n_valid_pred']}/{r['n_tasks']} | {r['hit_rate']} | {r.get('hit_ci', '-')} "
             f"| {r['mean_excess_of_picks']} | {r['cum_excess']} | {r['ann_sharpe']} | {r['max_dd']} "
             f"| {r['cum_ls']} | {r['ls_sharpe']} |"
         )
