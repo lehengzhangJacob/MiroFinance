@@ -23,7 +23,10 @@ from src.utils.env_loader import load_project_env
 from utils.eval_utils import verify_answer_for_datasets
 from src.memory.context import get_memory_components
 from src.memory.memory import extract_direction, parse_task_month
-from src.memory.monthly_reflection import compute_month_features
+from src.memory.monthly_reflection import (
+    compute_month_feature_rows,
+    compute_month_features,
+)
 from src.logging.logger import (
     bootstrap_logger,
     task_logging_context,
@@ -401,10 +404,10 @@ class BenchmarkEvaluator(ABC):
         # Task ordering:
         #   "shuffle" (default) avoids order bias;
         #   "sorted"  runs chronologically without barriers;
-        #   "monthly" runs chronologically WITH a barrier between entry months —
-        #     month M fully finishes (inference + judge) before M+1 starts, so
-        #     monthly cross-sectional reflection and the calibration ledger see
-        #     complete, settled months only (exact walk-forward semantics).
+        #   "monthly" runs chronologically WITH a barrier between entry months.
+        #     The legacy monthly reflector learns after each month; rolling v3
+        #     refreshes before each month using only labels whose exit dates
+        #     have actually matured (exact walk-forward semantics).
         task_order = str(
             OmegaConf.select(self.cfg, "benchmark.execution.task_order") or "shuffle"
         )
@@ -417,6 +420,7 @@ class BenchmarkEvaluator(ABC):
             for month in sorted(groups):
                 month_tasks = sorted(groups[month], key=lambda t: t.task_id)
                 print(f"\n=== month {month}: {len(month_tasks)} tasks ===")
+                await self._refresh_rolling_reflection(month, month_tasks)
                 shuffled_tasks.extend(month_tasks)
                 month_results = await asyncio.gather(
                     *[run_with_semaphore(task) for task in month_tasks],
@@ -424,6 +428,7 @@ class BenchmarkEvaluator(ABC):
                 )
                 results.extend(month_results)
                 await self._run_monthly_reflection(month, month_tasks, month_results)
+                await self._log_rolling_samples(month, month_tasks, month_results)
         else:
             shuffled_tasks = tasks.copy()
             if task_order == "sorted":
@@ -554,15 +559,17 @@ class BenchmarkEvaluator(ABC):
             return
 
         answer = attempt_result.get("model_boxed_answer", "")
-        try:
-            memory.log_outcome(
-                task_id=task.task_id,
-                month=parse_task_month(task.task_id),
-                predicted=extract_direction(answer),
-                judge_result=evaluation_result,
-            )
-        except Exception as e:
-            print(f"    Outcome ledger write failed: {e}")
+        if self.cfg.memory.get("outcome_logging_enabled", True):
+            try:
+                memory.log_outcome(
+                    task_id=task.task_id,
+                    month=parse_task_month(task.task_id),
+                    predicted=extract_direction(answer),
+                    judge_result=evaluation_result,
+                    available_after=(task.metadata or {}).get("exit_date", ""),
+                )
+            except Exception as e:
+                print(f"    Outcome ledger write failed: {e}")
 
         if not self.cfg.memory.get("reflection_enabled", False):
             return
@@ -591,6 +598,260 @@ class BenchmarkEvaluator(ABC):
                 print(f"    📝 memory {op}")
         except Exception as e:
             print(f"    Reflection failed: {e}")
+
+    async def _refresh_rolling_reflection(
+        self,
+        month: str,
+        month_tasks: List["BenchmarkTask"],
+    ) -> None:
+        """Before a month starts, validate rules using labels matured by its as-of date."""
+        if not self.cfg.get("memory") or not self.cfg.memory.get("enabled", False):
+            return
+        if not self.cfg.memory.get("reflection_enabled", False):
+            return
+        reflection_mode = str(self.cfg.memory.get("reflection_mode", "per_task"))
+        if reflection_mode != "rolling":
+            return
+        if self._month_is_fully_judged_in_cache(month_tasks):
+            print(f"    rolling[{month}] cached month; existing rule state retained")
+            return
+
+        entry_dates = {
+            str((task.metadata or {}).get("entry_date", "")) for task in month_tasks
+        }
+        entry_dates.discard("")
+        if len(entry_dates) != 1:
+            print(
+                f"    [rolling {month}] expected one decision date, got {sorted(entry_dates)}"
+            )
+            return
+        as_of_date = next(iter(entry_dates))
+
+        try:
+            memory, _ = get_memory_components(self.cfg)
+        except Exception as e:
+            print(f"    Memory unavailable for rolling reflection: {e}")
+            return
+        if not memory:
+            return
+
+        try:
+            config = OmegaConf.to_container(self.cfg.memory, resolve=True)
+            ops = memory.refresh_rolling(as_of_date, config=config)
+            if ops:
+                for op in ops:
+                    print(f"    rolling[{month}] {op}")
+            else:
+                print(f"    rolling[{month}] no statistically validated rule")
+        except Exception as e:
+            print(f"    [rolling {month}] refresh failed: {e}")
+
+    def _month_is_fully_judged_in_cache(
+        self, month_tasks: List["BenchmarkTask"]
+    ) -> bool:
+        """Avoid rewinding/replaying rule mutations for fully cached months."""
+        for task in month_tasks:
+            judged = False
+            for attempt in range(1, self.pass_at_k + 1):
+                path = self.output_dir / f"task_{task.task_id}_attempt_{attempt}.json"
+                if not path.exists():
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        result = json.load(f)
+                    if result.get("judge_result") in ("CORRECT", "INCORRECT"):
+                        judged = True
+                        break
+                except (OSError, json.JSONDecodeError):
+                    continue
+            if not judged:
+                return False
+        return bool(month_tasks)
+
+    async def _log_rolling_samples(
+        self,
+        month: str,
+        month_tasks: List["BenchmarkTask"],
+        month_results: list,
+    ) -> None:
+        """After judging, upsert this cross-section into the rolling sample ledger."""
+        if not self.cfg.get("memory") or not self.cfg.memory.get("enabled", False):
+            return
+        if not self.cfg.memory.get("reflection_enabled", False):
+            return
+        reflection_mode = str(self.cfg.memory.get("reflection_mode", "per_task"))
+        if reflection_mode == "rank_factor":
+            await self._log_rank_factor_samples(month, month_tasks, month_results)
+            return
+        if reflection_mode != "rolling":
+            return
+
+        try:
+            memory, _ = get_memory_components(self.cfg)
+        except Exception as e:
+            print(f"    Memory unavailable for rolling sample logging: {e}")
+            return
+        if not memory:
+            return
+
+        tasks_by_id = {task.task_id: task for task in month_tasks}
+        stocks: list[dict[str, Any]] = []
+        entry_date = ""
+        for result in month_results:
+            if isinstance(result, Exception) or not getattr(result, "attempts", None):
+                continue
+            task = tasks_by_id.get(result.task_id)
+            if task is None:
+                continue
+            judged = next(
+                (
+                    attempt
+                    for attempt in result.attempts
+                    if attempt.get("judge_result") in ("CORRECT", "INCORRECT")
+                ),
+                None,
+            )
+            if judged is None:
+                continue
+            meta = task.metadata or {}
+            entry_date = str(meta.get("entry_date", entry_date))
+            predicted = extract_direction(judged.get("model_boxed_answer", ""))
+            stocks.append(
+                {
+                    "task_id": result.task_id,
+                    "ts_code": meta.get("ts_code", ""),
+                    "stock_name": meta.get("stock_name", ""),
+                    "entry_date": meta.get("entry_date", ""),
+                    "exit_date": meta.get("exit_date", ""),
+                    "label": task.ground_truth,
+                    "predicted": predicted,
+                    "judge_result": judged["judge_result"],
+                }
+            )
+            # Cached attempts skip the live post-judge hook.
+            try:
+                memory.log_outcome(
+                    task_id=result.task_id,
+                    month=month,
+                    predicted=predicted,
+                    judge_result=judged["judge_result"],
+                    available_after=meta.get("exit_date", ""),
+                )
+            except Exception:
+                pass
+
+        if not stocks or not entry_date:
+            print(f"    [rolling {month}] no judged rows to log")
+            return
+
+        try:
+            feature_rows = compute_month_feature_rows(entry_date, stocks)
+            features_by_code = {row["ts_code"]: row for row in feature_rows}
+            samples: list[dict[str, Any]] = []
+            for stock in stocks:
+                feature_row = features_by_code.get(stock["ts_code"])
+                if not feature_row or not stock.get("exit_date"):
+                    continue
+                samples.append(
+                    {
+                        "task_id": stock["task_id"],
+                        "entry_month": month,
+                        "entry_date": stock["entry_date"],
+                        "exit_date": stock["exit_date"],
+                        **feature_row,
+                    }
+                )
+            added, updated = memory.log_samples(samples)
+            print(
+                f"    rolling[{month}] samples upserted: "
+                f"added={added}, updated={updated}, month_rows={len(samples)}"
+            )
+        except Exception as e:
+            print(f"    [rolling {month}] sample logging failed: {e}")
+
+    async def _log_rank_factor_samples(
+        self,
+        month: str,
+        month_tasks: List["BenchmarkTask"],
+        month_results: list,
+    ) -> None:
+        """Log one matured cross-section for rank-factor reliability memory."""
+        successful_ids = {
+            result.task_id
+            for result in month_results
+            if not isinstance(result, Exception)
+            and getattr(result, "attempts", None)
+            and any(
+                attempt.get("judge_result") == "CORRECT"
+                for attempt in result.attempts
+            )
+        }
+        rank_tasks = [
+            task
+            for task in month_tasks
+            if task.task_id in successful_ids
+            and (task.metadata or {}).get("task_type") == "cross_section_rank"
+        ]
+        if len(rank_tasks) != 1:
+            print(
+                f"    [rank-factor {month}] expected one valid ranking task, "
+                f"got {len(rank_tasks)}"
+            )
+            return
+        task = rank_tasks[0]
+        metadata = task.metadata or {}
+        entry_date = str(metadata.get("entry_date", ""))
+        exit_date = str(metadata.get("exit_date", ""))
+        pool = list(metadata.get("stock_pool", []))
+        excess_returns = metadata.get("excess_returns", {})
+        if not entry_date or not exit_date or not pool or not excess_returns:
+            print(f"    [rank-factor {month}] incomplete task metadata")
+            return
+
+        try:
+            memory, _ = get_memory_components(self.cfg)
+        except Exception as e:
+            print(f"    Memory unavailable for rank-factor logging: {e}")
+            return
+        if not memory:
+            return
+
+        try:
+            feature_rows = compute_month_feature_rows(
+                entry_date,
+                [
+                    {
+                        "ts_code": code,
+                        "stock_name": "",
+                        "label": "",
+                        "predicted": "",
+                        "judge_result": "",
+                    }
+                    for code in pool
+                ],
+            )
+            samples = []
+            for row in feature_rows:
+                code = row["ts_code"]
+                if code not in excess_returns:
+                    continue
+                samples.append(
+                    {
+                        "task_id": f"{task.task_id}_{code}",
+                        "entry_month": month,
+                        "entry_date": entry_date,
+                        "exit_date": exit_date,
+                        "excess_return": excess_returns[code],
+                        **row,
+                    }
+                )
+            added, updated = memory.log_samples(samples)
+            print(
+                f"    rank-factor[{month}] samples upserted: "
+                f"added={added}, updated={updated}, month_rows={len(samples)}"
+            )
+        except Exception as e:
+            print(f"    [rank-factor {month}] sample logging failed: {e}")
 
     async def _run_monthly_reflection(
         self,
@@ -649,6 +910,7 @@ class BenchmarkEvaluator(ABC):
                     month=month,
                     predicted=predicted,
                     judge_result=judged["judge_result"],
+                    available_after=meta.get("exit_date", ""),
                 )
             except Exception:
                 pass
@@ -778,7 +1040,9 @@ async def entrypoint(cfg: DictConfig) -> float:
     """
     Main entry point for running benchmarks with Hydra.
     """
-    print("Benchmark configuration:\n", OmegaConf.to_yaml(cfg, resolve=True))
+    # Keep environment-backed secrets as interpolation expressions in console
+    # output instead of resolving and printing API keys.
+    print("Benchmark configuration:\n", OmegaConf.to_yaml(cfg, resolve=False))
 
     def parse_func(x: str) -> BenchmarkTask:
         data = json.loads(x)

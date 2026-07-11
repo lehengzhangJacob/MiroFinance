@@ -116,6 +116,7 @@ async def execute_task_pipeline(
             task_description=task_description,
             task_file_name=task_file_name,
             task_id=task_id,
+            metadata=metadata or {},
         )
 
         task_log.final_boxed_answer = final_boxed_answer

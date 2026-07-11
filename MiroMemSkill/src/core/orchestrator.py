@@ -27,7 +27,12 @@ from src.utils.summary_utils import (
     extract_gaia_final_answer,
     extract_browsecomp_zh_final_answer,
 )
-from src.memory.context import build_memory_context_block, get_memory_components
+from src.memory.context import (
+    build_memory_context_block,
+    get_memory_components,
+    task_as_of_date,
+)
+from src.memory.feature_evidence import build_feature_evidence_block
 
 LOGGER_LEVEL = os.getenv("LOGGER_LEVEL", "INFO")
 logger = bootstrap_logger(level=LOGGER_LEVEL)
@@ -59,6 +64,29 @@ def _generate_message_id() -> str:
     """Generate random message ID using common LLM format"""
     # Use 8-character random hex string, similar to OpenAI API format, avoid cross-conversation cache hits
     return f"msg_{uuid.uuid4().hex[:8]}"
+
+
+def _filter_memskill_tool_definitions(
+    tool_definitions: list[dict[str, Any]],
+    *,
+    expose_memory_search: bool,
+    expose_memory_save: bool,
+) -> list[dict[str, Any]]:
+    """Hide unavailable memory tools from the prompt without mutating the input."""
+    filtered: list[dict[str, Any]] = []
+    for server in tool_definitions:
+        copied = dict(server)
+        tools = []
+        for tool in server.get("tools", []):
+            name = tool.get("name") if isinstance(tool, dict) else None
+            if name == "memory_search" and not expose_memory_search:
+                continue
+            if name == "memory_save" and not expose_memory_save:
+                continue
+            tools.append(tool)
+        copied["tools"] = tools
+        filtered.append(copied)
+    return filtered
 
 
 def _load_agent_prompt_class(prompt_class_name: str) -> BaseAgentPrompt:
@@ -688,7 +716,11 @@ class Orchestrator:
         return final_answer_text
 
     async def run_main_agent(
-        self, task_description, task_file_name=None, task_id="default_task"
+        self,
+        task_description,
+        task_file_name=None,
+        task_id="default_task",
+        metadata: dict[str, Any] | None = None,
     ):
         """
         Execute the main end-to-end task.
@@ -708,7 +740,9 @@ class Orchestrator:
             task_description, task_file_name
         )
 
-        task_guidence = """
+        task_guidence = ""
+        if self.cfg.main_agent.get("generic_task_guidance_enabled", True):
+            task_guidence = """
 
 Your task is to comprehensively address the question by actively collecting detailed information from the web, and generating a thorough, transparent report. Your goal is NOT to rush a single definitive answer or conclusion, but rather to gather complete information and present ALL plausible candidate answers you find, accompanied by clearly documented supporting evidence, reasoning steps, uncertainties, and explicit intermediate findings.
 
@@ -727,7 +761,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
 """
 
         # Add Chinese-specific guidance if enabled
-        if self.chinese_context:
+        if task_guidence and self.chinese_context:
             task_guidence += """
 
 ## 中文任务处理指导
@@ -743,9 +777,8 @@ Your objective is maximum completeness, transparency, and detailed documentation
 - **过程透明化**：所有步骤描述、状态更新、中间结果等都应使用中文，确保用户理解
 """
 
-        initial_user_content[0]["text"] = (
-            initial_user_content[0]["text"] + task_guidence
-        )
+        if task_guidence:
+            initial_user_content[0]["text"] += task_guidence
 
         hint_notes = ""  # Initialize hint_notes
         if self.cfg.main_agent.input_process.hint_generation:
@@ -778,13 +811,14 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 hint_notes = ""  # Continue execution but without hints
 
         # Memory/skill pre-task injection (passive retrieval)
+        memory_store = None
         if self.cfg.get("memory") and self.cfg.memory.get("enabled", False):
             try:
-                store, skill_lib = get_memory_components(self.cfg)
-                if store:
+                memory_store, skill_lib = get_memory_components(self.cfg)
+                if memory_store:
                     memory_block = build_memory_context_block(
                         task_description=task_description,
-                        store=store,
+                        store=memory_store,
                         skill_lib=skill_lib,
                         inject_top_k=int(self.cfg.memory.get("inject_top_k", 3)),
                         skill_top_k=int(self.cfg.memory.get("skill_top_k", 2)),
@@ -797,8 +831,39 @@ Your objective is maximum completeness, transparency, and detailed documentation
                         skill_preview_min_score=float(
                             self.cfg.memory.get("skill_preview_min_score", 0.0)
                         ),
+                        list_other_skills=bool(
+                            self.cfg.memory.get("skill_list_others", True)
+                        ),
                         calibration_enabled=bool(
                             self.cfg.memory.get("calibration_enabled", False)
+                        ),
+                        calibration_mode=str(
+                            self.cfg.memory.get("calibration_mode", "")
+                        ),
+                        calibration_min_samples=int(
+                            self.cfg.memory.get("calibration_min_samples", 16)
+                        ),
+                        rolling_status_enabled=(
+                            str(self.cfg.memory.get("reflection_mode", "")) == "rolling"
+                        ),
+                        rolling_min_samples=int(
+                            self.cfg.memory.get("rolling_min_samples", 64)
+                        ),
+                        rolling_min_months=int(
+                            self.cfg.memory.get("rolling_min_history_months", 6)
+                        ),
+                        rank_factor_enabled=(
+                            str(self.cfg.memory.get("reflection_mode", ""))
+                            == "rank_factor"
+                        ),
+                        rank_factor_min_months=int(
+                            self.cfg.memory.get("rank_factor_min_months", 3)
+                        ),
+                        rank_factor_fdr_q=float(
+                            self.cfg.memory.get("rank_factor_fdr_q", 0.10)
+                        ),
+                        rank_factor_status_enabled=bool(
+                            self.cfg.memory.get("rank_factor_status_enabled", False)
                         ),
                     )
                     if memory_block:
@@ -822,6 +887,22 @@ Your objective is maximum completeness, transparency, and detailed documentation
 
         # 2. Get tool definitions
         tool_definitions = await self.main_agent_tool_manager.get_all_tool_definitions()
+        if self.cfg.get("memory") and self.cfg.memory.get("enabled", False):
+            search_mode = str(
+                self.cfg.memory.get("expose_memory_search", "always")
+            ).lower()
+            expose_search = search_mode == "always"
+            if search_mode == "auto" and memory_store:
+                expose_search = memory_store.has_vector_memories(
+                    before_month="",
+                    before_date=task_as_of_date(task_description),
+                )
+            expose_save = bool(self.cfg.memory.get("expose_memory_save", True))
+            tool_definitions = _filter_memskill_tool_definitions(
+                tool_definitions,
+                expose_memory_search=expose_search,
+                expose_memory_save=expose_save,
+            )
         if self.cfg.sub_agents is not None and self.cfg.sub_agents:
             tool_definitions += expose_sub_agents_as_tools(self.cfg.sub_agents)
         if not tool_definitions:
@@ -848,6 +929,9 @@ Your objective is maximum completeness, transparency, and detailed documentation
             max_turns = sys.maxsize
         turn_count = 0
         task_failed = False  # Track whether task failed
+        ashare_tools_seen: set[str] = set()
+        feature_evidence_attempted = False
+        assistant_response_text = ""
         while turn_count < max_turns:
             turn_count += 1
             logger.debug(f"\n--- Main Agent Turn {turn_count} ---")
@@ -939,6 +1023,8 @@ Your objective is maximum completeness, transparency, and detailed documentation
                                 arguments=arguments,
                             )
                         )
+                        if server_name == "tool-ashare":
+                            ashare_tools_seen.add(tool_name)
 
                     call_end_time = time.time()
                     call_duration_ms = int((call_end_time - call_start_time) * 1000)
@@ -1014,6 +1100,82 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 message_history, all_tool_results_content_with_id, tool_calls_exceeded
             )
 
+            if (
+                not feature_evidence_attempted
+                and memory_store
+                and self.cfg.get("memory")
+                and self.cfg.memory.get("feature_evidence_enabled", False)
+                and metadata
+            ):
+                required_tools = set(
+                    self.cfg.memory.get(
+                        "feature_evidence_required_tools",
+                        [
+                            "ashare_price_history",
+                            "ashare_index_history",
+                            "ashare_valuation",
+                            "ashare_ml_signal",
+                        ],
+                    )
+                )
+                if required_tools.issubset(ashare_tools_seen):
+                    feature_evidence_attempted = True
+                    try:
+                        data_dir = os.path.join(
+                            str(self.cfg.get("data_dir", "data")), "ashare"
+                        )
+                        evidence_block, evidence_audit = build_feature_evidence_block(
+                            memory_store,
+                            entry_date=str(
+                                metadata.get("entry_date")
+                                or task_as_of_date(task_description)
+                            ),
+                            ts_code=str(metadata.get("ts_code", "")),
+                            stock_name=str(metadata.get("stock_name", "")),
+                            data_dir=data_dir,
+                            k=int(self.cfg.memory.get("feature_evidence_k", 12)),
+                            min_neighbors=int(
+                                self.cfg.memory.get("feature_evidence_min_neighbors", 8)
+                            ),
+                            min_common_features=int(
+                                self.cfg.memory.get(
+                                    "feature_evidence_min_common_features", 3
+                                )
+                            ),
+                        )
+                        min_pool = int(
+                            self.cfg.memory.get("feature_evidence_min_pool", 32)
+                        )
+                        if evidence_audit.get("eligible_samples", 0) < min_pool:
+                            evidence_block = ""
+                            evidence_audit["withheld_reason"] = (
+                                f"eligible sample pool below {min_pool}"
+                            )
+                        if evidence_block:
+                            message_history.append(
+                                {"role": "user", "content": evidence_block}
+                            )
+                            self.task_log.log_step(
+                                "feature_evidence_injection",
+                                "Injected point-in-time feature-conditioned evidence",
+                                "info",
+                                metadata=evidence_audit,
+                            )
+                        else:
+                            self.task_log.log_step(
+                                "feature_evidence_withheld",
+                                "No statistically reliable feature-conditioned evidence",
+                                "info",
+                                metadata=evidence_audit,
+                            )
+                    except Exception as e:
+                        logger.error(f"Feature evidence injection failed: {e}")
+                        self.task_log.log_step(
+                            "feature_evidence_injection",
+                            f"[ERROR] Feature evidence injection failed: {e}",
+                            "failed",
+                        )
+
         # Record main loop end
         if turn_count >= max_turns:
             if (
@@ -1034,18 +1196,32 @@ Your objective is maximum completeness, transparency, and detailed documentation
         # Final summary
         self.task_log.log_step("final_summary", "Generating final summary")
 
-        # Use context limit retry logic to generate final summary
-        final_answer_text = await self._handle_summary_with_context_limit_retry(
-            system_prompt,
-            main_agent_prompt_instance,
-            message_history,
-            tool_definitions,
-            "Final summary generation",
-            task_description,
-            task_failed,
-            agent_type="main",
-            task_guidence=task_guidence,
+        reuse_terminal_response = bool(
+            self.cfg.main_agent.output_process.get("reuse_terminal_response", False)
         )
+        terminal_has_boxed_answer = (
+            bool(assistant_response_text)
+            and "\\boxed{" in assistant_response_text.replace(" ", "")
+        )
+        if reuse_terminal_response and not task_failed and terminal_has_boxed_answer:
+            final_answer_text = assistant_response_text
+            self.task_log.log_step(
+                "final_summary_reused",
+                "Reused terminal boxed response without another LLM call",
+            )
+        else:
+            # Use context limit retry logic to generate final summary
+            final_answer_text = await self._handle_summary_with_context_limit_retry(
+                system_prompt,
+                main_agent_prompt_instance,
+                message_history,
+                tool_definitions,
+                "Final summary generation",
+                task_description,
+                task_failed,
+                agent_type="main",
+                task_guidence=task_guidence,
+            )
 
         # Handle response result
         if final_answer_text:

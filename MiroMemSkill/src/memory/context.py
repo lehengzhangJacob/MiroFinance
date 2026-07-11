@@ -11,6 +11,7 @@ import re
 from omegaconf import DictConfig
 
 from src.memory.memory import Mem0Memory
+from src.memory.rank_reflection import build_rank_factor_block
 from src.memory.skills import SkillLibrary
 from src.memory.vector_store import VectorStore
 
@@ -20,7 +21,7 @@ from src.memory.vector_store import VectorStore
 _QUERY_CUT_MARKERS = ["数据使用规则", "输出要求", "Data usage rules"]
 
 # Point-in-time anchor in ashare task prompts: 当前日期为 2025-04-01（收盘后）
-_AS_OF_RE = re.compile(r"当前日期为\s*(\d{4})-(\d{2})-\d{2}")
+_AS_OF_RE = re.compile(r"当前日期为\s*(\d{4})-(\d{2})-(\d{2})")
 
 
 def compact_task_query(task_description: str, max_chars: int = 400) -> str:
@@ -37,6 +38,12 @@ def task_before_month(task_description: str) -> str:
     """Extract the task's market month (YYYY-MM) for temporal memory filtering."""
     m = _AS_OF_RE.search(task_description)
     return f"{m.group(1)}-{m.group(2)}" if m else ""
+
+
+def task_as_of_date(task_description: str) -> str:
+    """Extract the exact task decision date as YYYYMMDD."""
+    m = _AS_OF_RE.search(task_description)
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else ""
 
 
 def get_memory_components(cfg: DictConfig) -> tuple[Mem0Memory | None, SkillLibrary | None]:
@@ -66,32 +73,108 @@ def build_memory_context_block(
     memory_enabled: bool = True,
     skill_enabled: bool = True,
     skill_preview_min_score: float = 0.0,
+    list_other_skills: bool = True,
     calibration_enabled: bool = False,
+    calibration_mode: str = "",
+    calibration_min_samples: int = 16,
+    rolling_status_enabled: bool = False,
+    rolling_min_samples: int = 64,
+    rolling_min_months: int = 6,
+    rank_factor_enabled: bool = False,
+    rank_factor_min_months: int = 3,
+    rank_factor_fdr_q: float = 0.10,
+    rank_factor_status_enabled: bool = False,
 ) -> str:
     sections: list[str] = []
     query = compact_task_query(task_description)
     before_month = task_before_month(task_description)
+    before_date = task_as_of_date(task_description)
 
-    if calibration_enabled and before_month:
-        # Self-calibration feedback: the agent's own aggregate error profile
-        # over past months — the one large-sample signal in past outcomes.
+    mode = (calibration_mode or ("legacy" if calibration_enabled else "off")).lower()
+    if mode != "off" and before_month:
         try:
-            calib = store.calibration_block(before_month)
+            if mode == "reliability":
+                calib = store.reliability_block(
+                    before_month,
+                    min_samples=calibration_min_samples,
+                    before_date=before_date,
+                )
+            elif mode == "legacy":
+                calib = store.calibration_block(
+                    before_month,
+                    min_samples=calibration_min_samples,
+                    before_date=before_date,
+                )
+            else:
+                raise ValueError(f"Unknown calibration_mode: {calibration_mode!r}")
         except Exception:
             calib = ""
         if calib:
             sections.append(calib)
 
+    if rolling_status_enabled and before_date:
+        try:
+            snapshot = store.rolling_snapshot(before_date)
+        except Exception:
+            snapshot = {"samples": 0, "months": 0, "rules": 0}
+        if snapshot["rules"]:
+            status = (
+                f"已有 {snapshot['samples']} 条、{snapshot['months']} 个月的已到期样本，"
+                f"其中 {snapshot['rules']} 条条件规则通过时间验证；仅在当前特征满足条件时使用。"
+            )
+        elif (
+            snapshot["samples"] < rolling_min_samples
+            or snapshot["months"] < rolling_min_months
+        ):
+            status = (
+                f"当前只有 {snapshot['samples']} 条、{snapshot['months']} 个月的已到期样本，"
+                f"尚未达到 {rolling_min_samples} 条且 {rolling_min_months} 个月的启用门槛。"
+            )
+        else:
+            status = (
+                f"已有 {snapshot['samples']} 条、{snapshot['months']} 个月的已到期样本，"
+                "但没有任何条件规则同时通过训练支持度、最近月份时间验证、跨月一致性和FDR检验。"
+            )
+        sections.append(
+            "### 大样本记忆状态\n"
+            + status
+            + " 不得自行从历史样本编造方向规则；请以当前任务的Qlib、行情、估值和基本面证据独立判断。"
+        )
+
+    if rank_factor_enabled and before_date:
+        try:
+            rank_block = build_rank_factor_block(
+                store,
+                before_date,
+                min_months=rank_factor_min_months,
+                fdr_q=rank_factor_fdr_q,
+                show_status_when_empty=rank_factor_status_enabled,
+            )
+        except Exception:
+            rank_block = ""
+        if rank_block:
+            sections.append(rank_block)
+
+    memory_search_available = False
     if memory_enabled:
         # Temporal filter: only lessons from strictly earlier market months are
         # visible, so shuffled/concurrent execution cannot leak future lessons.
         # Stance quota uses metadata-derived functional stance, so the injected
         # block never becomes a direction prior.
-        results = store.search(
-            query,
-            top_k=inject_top_k,
+        memory_search_available = store.has_vector_memories(
             before_month=before_month,
-            stance_balance=True,
+            before_date=before_date,
+        )
+        results = (
+            store.search(
+                query,
+                top_k=inject_top_k,
+                before_month=before_month,
+                before_date=before_date,
+                stance_balance=True,
+            )
+            if memory_search_available
+            else []
         )
         if results:
             sections.append(
@@ -115,12 +198,10 @@ def build_memory_context_block(
                     "### Top Skill Preview\n"
                     + skill_lib.load_skill_text(top_skill.name)[:1500]
                 )
-        # Keyword matching misses skills whose triggers don't appear in the
-        # task text (e.g. qlib/tushare utility skills), leaving them invisible
-        # and unused. Always list the rest so the agent can skill_load them.
+        # Optionally list skills whose triggers do not appear in the task text.
         matched_names = {s.name for s, _ in matches}
         others = [s for s in skill_lib.list_skills() if s["name"] not in matched_names]
-        if others:
+        if list_other_skills and others:
             sections.append(
                 "### Other Available Skills (load with skill_load(name))\n"
                 + "\n".join(f"- **{s['name']}**: {s['description']}" for s in others)
@@ -129,9 +210,21 @@ def build_memory_context_block(
     if not sections:
         return ""
 
+    available_tools = []
+    if memory_search_available:
+        available_tools.append("memory_search")
+    if skill_enabled and skill_lib:
+        available_tools.append("skill_load")
+    tool_hint = (
+        "You may also call "
+        + " / ".join(available_tools)
+        + " during reasoning for more detail.\n\n"
+        if available_tools
+        else ""
+    )
     return (
         "\n\n## Relevant Experience & Skills (from memory bank)\n\n"
         "Use the following retrieved experiences and skills to guide your approach. "
-        "You may also call memory_search / skill_load tools during reasoning for more detail.\n\n"
+        + tool_hint
         + "\n\n".join(sections)
     )

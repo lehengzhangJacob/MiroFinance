@@ -1,0 +1,25 @@
+# Ranking memory: learn factor reliability from matured monthly cross-sections.
+enabled: true
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_rank_mem0"
+inject_top_k: 0
+skill_top_k: 1
+skill_enabled: true
+skill_preview_min_score: 2.0
+skill_list_others: false
+inject_enabled: false
+calibration_enabled: false
+calibration_mode: "off"
+reflection_enabled: true
+reflection_mode: "rank_factor"
+rank_factor_min_months: 3
+rank_factor_fdr_q: 0.10
+# Optional abstention status is disabled by default; the R2 ablation did not
+# improve RankIC, so production comparisons only inject validated factors.
+rank_factor_status_enabled: false
+outcome_logging_enabled: false
+feature_evidence_enabled: false
+expose_memory_search: "never"
+expose_memory_save: false
+embedding_model: "embedding-3"

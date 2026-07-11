@@ -1,0 +1,36 @@
+{
+  "fetched_at": "2026-07-07T21:58:39",
+  "start_date": "20230101",
+  "end_date": "20250731",
+  "index_code": "000300.SH",
+  "stock_pool": {
+    "600519.SH": {
+      "name": "贵州茅台",
+      "industry": "白酒"
+    },
+    "300750.SZ": {
+      "name": "宁德时代",
+      "industry": "电池"
+    },
+    "600036.SH": {
+      "name": "招商银行",
+      "industry": "银行"
+    },
+    "002594.SZ": {
+      "name": "比亚迪",
+      "industry": "汽车整车"
+    },
+    "600900.SH": {
+      "name": "长江电力",
+      "industry": "电力"
+    },
+    "601919.SH": {
+      "name": "中远海控",
+      "industry": "航运"
+    }
+  },
+  "optional_datasets": {
+    "daily_basic": true,
+    "fina_indicator": true
+  }
+}

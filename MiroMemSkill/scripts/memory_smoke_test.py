@@ -3,10 +3,11 @@
 
 Covers the failure modes that sank the previous implementation:
   - unparseable reflection output must be DISCARDED, never stored raw
-  - retrieval is embedding-only with a strict before_month temporal filter
+  - retrieval enforces exact label exit dates (with before_month fallback)
   - stance quota uses metadata-derived functional stance, not keyword scans
   - concurrent writers cannot corrupt the JSONL (fcntl lock)
   - consolidation (ADD/UPDATE/DELETE/NONE) keeps the bank non-redundant
+  - rolling rules need large samples and temporal validation, and resume cleanly
 """
 
 from __future__ import annotations
@@ -18,20 +19,40 @@ import tempfile
 import threading
 from pathlib import Path
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("GLM_API_KEY", "smoke-test-key")
 
-from src.memory.context import build_memory_context_block, task_before_month  # noqa: E402
+from src.memory.context import (  # noqa: E402
+    build_memory_context_block,
+    task_as_of_date,
+    task_before_month,
+)
+from src.memory.feature_evidence import (  # noqa: E402
+    build_feature_evidence_block,
+    compute_task_feature_row,
+    nearest_neighbors,
+)
 from src.memory.memory import (  # noqa: E402
     Mem0Memory,
     functional_stance,
     parse_task_month,
 )
-from src.memory.monthly_reflection import compute_month_features  # noqa: E402
+from src.memory.monthly_reflection import (  # noqa: E402
+    _trailing_percentile,
+    compute_month_features,
+)
+from src.memory.rolling_reflection import (  # noqa: E402
+    OUTPERFORM,
+    RollingRuleConfig,
+    mine_rolling_rules,
+)
 from src.memory.skills import SkillLibrary  # noqa: E402
 from src.memory.vector_store import VectorStore  # noqa: E402
+from src.core.orchestrator import _filter_memskill_tool_definitions  # noqa: E402
 
 # ---------------------------------------------------------------- fakes
 
@@ -84,7 +105,7 @@ def test_vector_store_crud_and_history() -> None:
         assert store.delete(rec.id, source_task="t3")
         assert store.count() == 0
 
-        history = [json.loads(l) for l in open(store.history_path)]
+        history = [json.loads(line) for line in open(store.history_path)]
         assert [h["op"] for h in history] == ["ADD", "UPDATE", "DELETE"]
         assert history[1]["old_content"] == "动量教训一"
         print("[OK] vector store CRUD + history audit")
@@ -104,7 +125,7 @@ def test_concurrent_writes() -> None:
         for t in threads:
             t.join()
 
-        lines = [l for l in open(store.memories_path) if l.strip()]
+        lines = [line for line in open(store.memories_path) if line.strip()]
         assert len(lines) == 40, f"expected 40 lines, got {len(lines)}"
         for line in lines:
             json.loads(line)  # every line must be valid JSON
@@ -146,7 +167,41 @@ def test_functional_stance_mapping() -> None:
     assert functional_stance("", "CORRECT") == "neutral"
     assert parse_task_month("ashare_300012_2025-04-01") == "2025-04"
     assert task_before_month("当前日期为 2025-04-01（收盘后）") == "2025-04"
+    assert task_as_of_date("当前日期为 2025-04-01（收盘后）") == "20250401"
     print("[OK] functional stance + month parsing")
+
+
+def test_exact_date_visibility() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = VectorStore(store_dir=tmp, namespace="dates")
+        memory = Mem0Memory(store=store, api_key="smoke-test-key")
+        store.add(
+            "当近20日动量显著为正时使用已验证的大样本条件规则",
+            metadata={
+                "entry_month": "2024-07",
+                "available_after": "20240805",
+                "functional_stance": "neutral",
+            },
+        )
+        assert memory.search(
+            "动量", top_k=3, before_month="2024-08", before_date="20240801"
+        ) == []
+        assert len(
+            memory.search(
+                "动量", top_k=3, before_month="2024-08", before_date="20240805"
+            )
+        ) == 1
+
+        memory.log_outcome(
+            "t1", "2024-07", "跑赢", "CORRECT", available_after="20240805"
+        )
+        assert memory.calibration_block(
+            "2024-08", min_samples=1, before_date="20240801"
+        ) == ""
+        assert "1 次" in memory.calibration_block(
+            "2024-08", min_samples=1, before_date="20240805"
+        )
+        print("[OK] exact exit-date embargo for memories and calibration")
 
 
 def test_unparseable_extraction_discarded() -> None:
@@ -220,7 +275,7 @@ def test_consolidation_add_none_update_delete() -> None:
         recs = memory.store.all_records()
         assert len(recs) == 1 and recs[0].content == lesson_c
 
-        history_ops = [json.loads(l)["op"] for l in open(memory.store.history_path)]
+        history_ops = [json.loads(line)["op"] for line in open(memory.store.history_path)]
         assert history_ops == ["ADD", "UPDATE", "DELETE", "ADD"], history_ops
         print("[OK] consolidation pipeline: ADD -> NONE -> UPDATE(merge) -> DELETE+ADD; history complete")
 
@@ -283,7 +338,7 @@ def test_outcome_ledger_and_calibration() -> None:
                 i += 1
         memory.log_outcome("t0", "2024-07", "跑输", "CORRECT")  # dup: ignored
         memory.log_outcome("bad", "2024-07", "", "CORRECT")  # invalid: ignored
-        lines = [l for l in open(memory.outcomes_path) if l.strip()]
+        lines = [line for line in open(memory.outcomes_path) if line.strip()]
         assert len(lines) == 16, f"ledger rows {len(lines)}"
 
         block = memory.calibration_block("2024-08")
@@ -353,7 +408,123 @@ def test_month_features_table() -> None:
     for col in ("rel5", "rel20", "rel60", "pe_pct", "pb_pct", "turn_pct", "ml_rank", "label"):
         assert col in header, header
     assert "华测检测" in csv_str and "江淮汽车" in csv_str
+    assert _trailing_percentile(pd.Series([1.0, 2.0, None])) is None
+    assert _trailing_percentile(pd.Series([1.0, 2.0, 3.0])) == 100.0
     print("[OK] month feature table computed from local cache")
+
+
+def _synthetic_rolling_samples() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for month in range(1, 9):
+        entry_date = f"2024{month:02d}01"
+        exit_date = f"2024{month:02d}20"
+        for stock in range(16):
+            condition = stock < 8
+            # The condition is perfect; outside it the labels are balanced.
+            label = OUTPERFORM if condition or stock % 2 == 0 else "跑输"
+            rows.append(
+                {
+                    "task_id": f"synthetic_{month:02d}_{stock:02d}",
+                    "entry_month": f"2024-{month:02d}",
+                    "entry_date": entry_date,
+                    "exit_date": exit_date,
+                    "ts_code": f"{stock:06d}.SZ",
+                    "rel20": 10.0 if condition else -1.0,
+                    "label": label,
+                    "pred": label,
+                    "correct": "Y",
+                }
+            )
+    return rows
+
+
+def test_rolling_large_sample_and_idempotency() -> None:
+    samples = _synthetic_rolling_samples()
+    assert mine_rolling_rules(samples[:16], "20240201") == []
+
+    inverted_validation = []
+    for row in samples:
+        changed = dict(row)
+        if changed["entry_month"] in ("2024-07", "2024-08") and changed["rel20"] == 10.0:
+            changed["label"] = "跑输"
+        inverted_validation.append(changed)
+    assert mine_rolling_rules(inverted_validation, "20240901") == []
+
+    rules = mine_rolling_rules(samples, "20240901", RollingRuleConfig())
+    assert len(rules) == 1, [rule.rule_id for rule in rules]
+    rule = rules[0]
+    assert rule.metadata["source"] == "rolling_statistical"
+    assert rule.metadata["validation_support"] >= 8
+    assert rule.metadata["available_after"] == "20240820"
+    assert "时间验证样本" in rule.content
+
+    # A future, inverted cross-section must not affect a September-1 refresh.
+    future = []
+    for stock in range(16):
+        future.append(
+            {
+                "task_id": f"future_{stock}",
+                "entry_month": "2024-09",
+                "entry_date": "20240901",
+                "exit_date": "20240920",
+                "ts_code": f"{stock:06d}.SZ",
+                "rel20": 10.0,
+                "label": "跑输",
+            }
+        )
+    assert [r.rule_id for r in mine_rolling_rules(samples + future, "20240901")] == [
+        rule.rule_id
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = VectorStore(store_dir=tmp, namespace="rolling")
+        memory = Mem0Memory(store=store, api_key="smoke-test-key")
+        assert memory.log_samples(samples) == (128, 0)
+        assert memory.log_samples(samples) == (0, 0)
+
+        first_ops = memory.refresh_rolling("20240901")
+        assert any(op.startswith("ADD") for op in first_ops), first_ops
+        history_count = len([line for line in open(store.history_path) if line.strip()])
+        second_ops = memory.refresh_rolling("20240901")
+        assert second_ops == ["UNCHANGED: 1 validated rolling rules"], second_ops
+        assert len([line for line in open(store.history_path) if line.strip()]) == history_count
+
+        memory.log_samples(future)
+        assert memory.refresh_rolling("20240901") == [
+            "UNCHANGED: 1 validated rolling rules"
+        ]
+        assert len(
+            memory.search(
+                "动量", top_k=3, before_month="2024-09", before_date="20240901"
+            )
+        ) == 1
+
+        # Rewinding a completed namespace must remove future-state rules.
+        rewind_ops = memory.refresh_rolling("20240101")
+        assert any(op.startswith("DELETE") for op in rewind_ops), rewind_ops
+        assert store.count() == 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = VectorStore(store_dir=tmp, namespace="rolling_guard")
+        memory = Mem0Memory(store=store, api_key="smoke-test-key")
+        memory.log_samples(inverted_validation)
+        assert memory.refresh_rolling("20240901") == []
+        block = build_memory_context_block(
+            task_description=(
+                "当前日期为 2024-09-01（收盘后）。预测股票相对沪深300表现。"
+                "数据使用规则（务必遵守）：…"
+            ),
+            store=memory,
+            skill_lib=None,
+            memory_enabled=True,
+            skill_enabled=False,
+            rolling_status_enabled=True,
+            rolling_min_samples=64,
+            rolling_min_months=6,
+        )
+        assert "没有任何条件规则" in block, block
+        assert "不得自行从历史样本编造方向规则" in block, block
+        print("[OK] rolling rules: large sample, temporal holdout, idempotent resume")
 
 
 def test_context_block_with_calibration() -> None:
@@ -390,12 +561,135 @@ def test_context_block_with_calibration() -> None:
         print("[OK] context block: calibration injected for later months only")
 
 
+def test_direction_free_reliability_and_tool_filter() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = VectorStore(store_dir=tmp, namespace="reliability")
+        memory = Mem0Memory(store=store, api_key="smoke-test-key")
+        for i in range(16):
+            memory.log_outcome(
+                f"t{i}",
+                "2024-07",
+                "跑输" if i < 15 else "跑赢",
+                "CORRECT" if i % 2 == 0 else "INCORRECT",
+                available_after="20240731",
+            )
+        block = memory.reliability_block(
+            "2024-08", min_samples=16, before_date="20240801"
+        )
+        assert "历史总体命中率" in block
+        assert "预测分布" not in block
+        assert "跑输" not in block and "跑赢" not in block
+
+        definitions = [
+            {
+                "name": "tool-memskill",
+                "tools": [
+                    {"name": "memory_search"},
+                    {"name": "memory_save"},
+                    {"name": "skill_load"},
+                ],
+            }
+        ]
+        filtered = _filter_memskill_tool_definitions(
+            definitions,
+            expose_memory_search=False,
+            expose_memory_save=False,
+        )
+        assert [tool["name"] for tool in filtered[0]["tools"]] == ["skill_load"]
+        assert len(definitions[0]["tools"]) == 3, "filter must not mutate cached definitions"
+        print("[OK] reliability block has no direction anchor; unavailable memory tools hidden")
+
+
+def test_feature_conditioned_evidence() -> None:
+    current = {
+        "rel5": 1.0,
+        "rel20": 4.0,
+        "rel60": 8.0,
+        "pe_pct": 50.0,
+        "pb_pct": 40.0,
+        "turn_pct": 60.0,
+        "ml_rank": 3,
+    }
+    samples = []
+    for i in range(12):
+        row = dict(current)
+        for offset, key in enumerate(("rel5", "rel20", "rel60", "pe_pct")):
+            row[key] = float(row[key]) + (i - 5.5) * (offset + 1) / 20
+        row.update(
+            {
+                "task_id": f"n{i}",
+                "entry_month": "2024-07",
+                "entry_date": f"202407{i + 1:02d}",
+                "exit_date": "20240801",
+                "ts_code": f"{i:06d}.SZ",
+                "label": OUTPERFORM,
+            }
+        )
+        samples.append(row)
+    neighbors = nearest_neighbors(current, samples, k=12)
+    assert len(neighbors) == 12
+    assert all(row["common_features"] >= 3 for row in neighbors)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = VectorStore(store_dir=tmp, namespace="feature")
+        memory = Mem0Memory(store=store, api_key="smoke-test-key")
+        real_current = compute_task_feature_row("20250401", "300012.SZ", "华测检测")
+        synthetic = []
+        for i in range(12):
+            row = {
+                "task_id": f"feature_{i}",
+                "entry_month": "2024-07",
+                "entry_date": f"202407{i + 1:02d}",
+                "exit_date": "20240801",
+                "ts_code": f"{i:06d}.SZ",
+                "label": OUTPERFORM,
+            }
+            for offset, key in enumerate(
+                ("rel5", "rel20", "rel60", "pe_pct", "pb_pct", "turn_pct", "ml_rank")
+            ):
+                value = real_current.get(key)
+                row[key] = (
+                    float(value) + (i - 5.5) * (offset + 1) / 100
+                    if value not in ("", None)
+                    else ""
+                )
+            synthetic.append(row)
+        memory.log_samples(synthetic)
+        evidence, audit = build_feature_evidence_block(
+            memory,
+            entry_date="20250401",
+            ts_code="300012.SZ",
+            stock_name="华测检测",
+            k=12,
+            min_neighbors=8,
+        )
+        assert "相似历史样本" in evidence
+        assert "跑赢" in evidence
+        assert audit["eligible_samples"] == 12
+
+        for i, row in enumerate(synthetic):
+            row["label"] = OUTPERFORM if i % 2 == 0 else "跑输"
+        memory.log_samples(synthetic)
+        evidence, audit = build_feature_evidence_block(
+            memory,
+            entry_date="20250401",
+            ts_code="300012.SZ",
+            stock_name="华测检测",
+            k=12,
+            min_neighbors=8,
+        )
+        assert evidence == ""
+        assert audit["neighbor_direction"] == "inconclusive"
+        print("[OK] post-tool feature evidence is point-in-time and withholds noisy majorities")
+
+
 if __name__ == "__main__":
     VectorStore.embed = fake_embed  # offline: deterministic embeddings
     test_vector_store_crud_and_history()
     test_concurrent_writes()
     test_month_filter_and_stance_quota()
     test_functional_stance_mapping()
+    test_exact_date_visibility()
     test_unparseable_extraction_discarded()
     test_consolidation_add_none_update_delete()
     test_context_block()
@@ -404,5 +698,8 @@ if __name__ == "__main__":
     test_monthly_reflection_pipeline()
     test_month_grouping_order()
     test_month_features_table()
+    test_rolling_large_sample_and_idempotency()
     test_context_block_with_calibration()
+    test_direction_free_reliability_and_tool_filter()
+    test_feature_conditioned_evidence()
     print("\n=== All memory smoke tests passed ===")

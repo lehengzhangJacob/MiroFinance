@@ -213,6 +213,12 @@ tmp/
 data/*
 !data/README.md
 !data/FSI-2023-DOWNLOAD.xlsx
+!data/ashare/
+!data/ashare/**
+!data/ashare_pred/
+!data/ashare_pred/**
+!data/ashare_rank/
+!data/ashare_rank/**
 
 debug.py
 **/debug.py

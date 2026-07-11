@@ -12,6 +12,8 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from src.utils.ashare_rank import parse_ranked_codes
+
 EVALUATION_PROMPT_SIMPLEQA = """
 Your job is to look at a question, a gold target, and a predicted answer, and then assign a grade of either ["CORRECT", "INCORRECT", "NOT_ATTEMPTED"].
 First, I will give examples of each grade, and then you will grade a new example.
@@ -526,6 +528,16 @@ async def verify_answer_for_datasets(
     """
 
     try:
+        # Ranking quality is continuous and is evaluated offline by
+        # scripts/ashare/eval_rank.py.  The framework-level pass@1 result only
+        # records whether the model produced one complete, valid permutation.
+        if "ashare-rank" in benchmark_name and metadata:
+            parsed = parse_ranked_codes(
+                predicted_answer,
+                metadata.get("stock_pool", []),
+            )
+            return "CORRECT" if parsed.ok else "INCORRECT"
+
         # Handle finsearchcomp with dynamic judge prompts
         if "finsearchcomp" in benchmark_name and metadata:
             judge_prompt_template = metadata.get("judge_prompt_template", "")

@@ -37,7 +37,7 @@ QUESTION_TEMPLATE = """\
 数据使用规则（务必遵守）：
 - 只能使用 ashare-market 工具集（ashare_price_history、ashare_index_history、ashare_valuation、ashare_financials、ashare_ml_signal、ashare_stock_info）获取数据，调用时 as_of 参数必须设为 {as_of_compact}；
 - 禁止使用任何网络搜索或你记忆中 {as_of} 之后的市场信息（如后续涨跌、新闻、财报），这是一个严格的点时（point-in-time）预测任务；
-- 建议综合考察：近期动量与波动（如 20/60 日相对指数表现）、估值水平（PE/PB 历史分位）、最近一期已公告财务指标（注意公告日期必须早于 {as_of}）、成交与换手变化。
+- 建议综合考察：近期动量与波动（如 20/60/120 日相对指数表现；ashare_price_history / ashare_index_history 请使用 lookback_days=250 以覆盖更长历史）、估值水平（PE/PB 历史分位，ashare_valuation 建议 lookback_days=250）、最近一期已公告财务指标（注意公告日期必须早于 {as_of}）、成交与换手变化。
 
 输出要求：先用中文简要给出 3-5 条核心依据，最后一行只输出最终结论：\\boxed{{跑赢}} 或 \\boxed{{跑输}}（二选一，不得输出其他内容）。"""
 

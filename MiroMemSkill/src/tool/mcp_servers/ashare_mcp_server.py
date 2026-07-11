@@ -19,11 +19,18 @@ import pandas as pd
 from fastmcp import FastMCP
 
 from src.logging.logger import setup_mcp_logging
+from src.memory.monthly_reflection import compute_month_feature_rows
 
 setup_mcp_logging(tool_name=os.path.basename(__file__))
 mcp = FastMCP("ashare-market-mcp-server")
 
 _DATA_DIR = Path(os.environ.get("ASHARE_DATA_DIR", "data/ashare"))
+
+# Local cache starts ~2023-01-01; default to the longest practical window so
+# agents see multi-quarter trend context without extra tool calls.
+DEFAULT_PRICE_LOOKBACK = 250
+DEFAULT_VALUATION_LOOKBACK = 250
+MAX_LOOKBACK_DAYS = 500
 
 
 def _norm_date(as_of: str) -> str:
@@ -59,9 +66,12 @@ def _window_summary(df: pd.DataFrame, close_col: str) -> str:
     lines = []
     closes = df[close_col].astype(float)
     last = closes.iloc[-1]
-    for w in (5, 20, 60):
+    for w in (5, 20, 60, 120):
         if len(closes) > w:
             lines.append(f"- 近{w}个交易日收益率: {_pct(last, closes.iloc[-1 - w])}%")
+    full_w = min(len(closes) - 1, MAX_LOOKBACK_DAYS)
+    if full_w > 120:
+        lines.append(f"- 近{full_w}个交易日收益率: {_pct(last, closes.iloc[-1 - full_w])}%")
     if len(closes) > 20:
         rets = closes.pct_change().dropna().iloc[-20:]
         lines.append(f"- 近20日日收益率波动(标准差): {round(rets.std() * 100, 2)}%")
@@ -80,15 +90,15 @@ def ashare_stock_info() -> str:
 
 
 @mcp.tool()
-def ashare_price_history(ts_code: str, as_of: str, lookback_days: int = 60) -> str:
+def ashare_price_history(ts_code: str, as_of: str, lookback_days: int = DEFAULT_PRICE_LOOKBACK) -> str:
     """Get daily OHLCV history (forward-adjusted, qfq) for one stock up to as_of.
 
     Args:
         ts_code: Stock code like 600519.SH.
         as_of: Point-in-time cutoff date (YYYY-MM-DD). Data after this date is never returned.
-        lookback_days: Number of most recent trading days to return (default 60, max 250).
+        lookback_days: Number of most recent trading days to return (default 250, max 500).
     """
-    lookback_days = max(5, min(int(lookback_days), 250))
+    lookback_days = max(5, min(int(lookback_days), MAX_LOOKBACK_DAYS))
     df = _cut(_load_csv(f"daily_{ts_code}.csv"), as_of)
     if df.empty:
         return f"No data for {ts_code} on or before {as_of}."
@@ -105,14 +115,14 @@ def ashare_price_history(ts_code: str, as_of: str, lookback_days: int = 60) -> s
 
 
 @mcp.tool()
-def ashare_index_history(as_of: str, lookback_days: int = 60) -> str:
+def ashare_index_history(as_of: str, lookback_days: int = DEFAULT_PRICE_LOOKBACK) -> str:
     """Get CSI 300 (000300.SH) daily history up to as_of, for relative-strength comparison.
 
     Args:
         as_of: Point-in-time cutoff date (YYYY-MM-DD).
-        lookback_days: Number of most recent trading days to return (default 60, max 250).
+        lookback_days: Number of most recent trading days to return (default 250, max 500).
     """
-    lookback_days = max(5, min(int(lookback_days), 250))
+    lookback_days = max(5, min(int(lookback_days), MAX_LOOKBACK_DAYS))
     meta = _meta()
     df = _cut(_load_csv(f"index_{meta['index_code']}.csv"), as_of)
     if df.empty:
@@ -130,15 +140,15 @@ def ashare_index_history(as_of: str, lookback_days: int = 60) -> str:
 
 
 @mcp.tool()
-def ashare_valuation(ts_code: str, as_of: str, lookback_days: int = 120) -> str:
+def ashare_valuation(ts_code: str, as_of: str, lookback_days: int = DEFAULT_VALUATION_LOOKBACK) -> str:
     """Get valuation & liquidity metrics (PE-TTM, PB, turnover, market cap) up to as_of.
 
     Args:
         ts_code: Stock code like 600519.SH.
         as_of: Point-in-time cutoff date (YYYY-MM-DD).
-        lookback_days: Trading days of history for percentile context (default 120, max 250).
+        lookback_days: Trading days of history for percentile context (default 250, max 500).
     """
-    lookback_days = max(5, min(int(lookback_days), 250))
+    lookback_days = max(5, min(int(lookback_days), MAX_LOOKBACK_DAYS))
     try:
         df = _cut(_load_csv(f"daily_basic_{ts_code}.csv"), as_of)
     except FileNotFoundError:
@@ -221,6 +231,101 @@ def ashare_financials(ts_code: str, as_of: str) -> str:
         tail.round(3).to_csv(index=False),
     ]
     return "\n".join(out)
+
+
+@mcp.tool()
+def ashare_cross_section_snapshot(as_of: str) -> str:
+    """Get a point-in-time feature snapshot for every stock in the A-share pool.
+
+    This batch tool is intended for cross-sectional ranking.  It returns only
+    information available on or before ``as_of``: relative 5/20/60-day
+    momentum, valuation/liquidity percentiles, and the walk-forward Qlib score
+    and rank.  It never returns future returns or benchmark labels.
+
+    Args:
+        as_of: Point-in-time cutoff date (YYYY-MM-DD or YYYYMMDD).
+    """
+    entry_date = _norm_date(as_of)
+    meta = _meta()
+    stocks = [
+        {
+            "ts_code": ts_code,
+            "stock_name": info["name"],
+            "label": "",
+            "predicted": "",
+            "judge_result": "",
+        }
+        for ts_code, info in meta["stock_pool"].items()
+    ]
+    rows = compute_month_feature_rows(entry_date, stocks, data_dir=_DATA_DIR)
+    industries = {
+        ts_code: info.get("industry", "")
+        for ts_code, info in meta["stock_pool"].items()
+    }
+
+    try:
+        signal = _load_csv("qlib_signal.csv")
+        signal = signal[signal["entry_date"].astype(str) == entry_date].set_index(
+            "ts_code"
+        )
+    except FileNotFoundError:
+        signal = pd.DataFrame()
+
+    for row in rows:
+        ts_code = row["ts_code"]
+        row["industry"] = industries.get(ts_code, "")
+        row["ml_score"] = (
+            round(float(signal.loc[ts_code, "score"]), 6)
+            if not signal.empty and ts_code in signal.index
+            else ""
+        )
+        try:
+            financials = _load_csv(f"financials_{ts_code}.csv")
+            financials = financials[financials["ann_date"].notna()]
+            financials = financials[
+                financials["ann_date"].astype(str) <= entry_date
+            ].sort_values("ann_date")
+            latest = financials.iloc[-1] if not financials.empty else None
+        except FileNotFoundError:
+            latest = None
+        row["financial_ann_date"] = (
+            str(latest["ann_date"]) if latest is not None else ""
+        )
+        for column in ("roe", "or_yoy", "netprofit_yoy"):
+            row[column] = (
+                round(float(latest[column]), 3)
+                if latest is not None
+                and column in latest.index
+                and pd.notna(latest[column])
+                else ""
+            )
+
+    columns = [
+        "ts_code",
+        "name",
+        "industry",
+        "rel5",
+        "rel20",
+        "rel60",
+        "pe_pct",
+        "pb_pct",
+        "turn_pct",
+        "ml_score",
+        "ml_rank",
+        "financial_ann_date",
+        "roe",
+        "or_yoy",
+        "netprofit_yoy",
+    ]
+    frame = pd.DataFrame(rows, columns=columns).sort_values("ts_code")
+    return "\n".join(
+        [
+            f"# A股池截面快照（严格点时），决策日 {entry_date}",
+            "rel5/20/60 为相对沪深300超额收益率(%)；分位字段范围 0-100；"
+            "ml_rank=1 表示 Qlib 预测未来20日收益最高；财务字段来自决策日前最近公告。",
+            frame.to_csv(index=False),
+        ]
+    )
 
 
 if __name__ == "__main__":

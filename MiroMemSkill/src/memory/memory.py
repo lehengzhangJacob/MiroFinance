@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mem0-style memory facade: two-phase add (extract -> consolidate) + filtered search.
+"""Mem0-style memory facade plus statistically validated rolling reflection.
 
 Pipeline per finished task (cf. mem0ai/mem0, arXiv:2504.19413):
   1. Extraction phase: one LLM call distills 0-2 atomic conditional lessons
@@ -14,13 +14,16 @@ Pipeline per finished task (cf. mem0ai/mem0, arXiv:2504.19413):
      namespace's history JSONL.
 
 Retrieval applies metadata filters:
-  - before_month: only memories whose source market month is strictly earlier
-    than the current task's month are visible (kills look-ahead leakage under
-    any task ordering).
+  - before_date: labels become visible only on/after their actual exit date;
+    before_month remains a conservative fallback for legacy records.
   - functional-stance quota: a lesson's direction pressure is derived from
     metadata (predicted_direction x judge_result), not keyword scanning — a
     counter-lesson from a wrong 跑输 prediction pushes bullish, so it counts
     against the bullish quota.
+
+The A-share v3 path does not ask an LLM to discover rules.  It keeps an
+idempotent feature/outcome ledger and synchronizes only expanding-window rules
+that pass temporal validation in ``rolling_reflection``.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ import json
 import os
 import re
 from collections import Counter
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -40,6 +43,13 @@ from src.memory.prompts import (
     EXTRACTION_PROMPT,
     MONTHLY_REFLECTION_PROMPT,
     UPDATE_PROMPT,
+)
+from src.memory.rolling_reflection import (
+    RollingRuleConfig,
+    ValidatedRule,
+    mine_rolling_rules,
+    normalize_date,
+    normalize_month,
 )
 from src.memory.vector_store import MemoryRecord, VectorStore
 from src.utils.env_loader import load_project_env
@@ -324,12 +334,23 @@ class Mem0Memory:
                 + list(candidate_meta.get("source_tasks", []))
             )
         )
-        return {
+        merged = {
             "entry_month": max(months) if months else "",
             "functional_stance": old_stance if old_stance == new_stance else "mixed",
             "source_tasks": source_tasks,
             "judge_result": "MERGED",
         }
+        availability = [
+            normalize_date(value)
+            for value in (
+                target.metadata.get("available_after"),
+                candidate_meta.get("available_after"),
+            )
+            if normalize_date(value)
+        ]
+        if availability:
+            merged["available_after"] = max(availability)
+        return merged
 
     def add_monthly(self, month: str, features_table: str, n_stocks: int) -> list[str]:
         """Monthly cross-sectional reflection (v2 learning signal).
@@ -381,6 +402,179 @@ class Mem0Memory:
                 ops.append(op)
         return ops
 
+    # -------------------------------------------- rolling statistical reflection
+
+    @property
+    def samples_path(self):
+        return self.store.store_dir / f"{self.store.namespace}_samples.jsonl"
+
+    def log_samples(self, samples: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
+        """Idempotently upsert structured feature/outcome rows by task id.
+
+        Upsert, rather than append-only deduplication, lets a resumed run repair
+        a partial row while guaranteeing that reprocessing a completed month
+        cannot give that month extra statistical weight.
+        """
+        incoming: dict[str, dict[str, Any]] = {}
+        for raw in samples:
+            task_id = str(raw.get("task_id", "") or "")
+            if not task_id:
+                continue
+            row: dict[str, Any] = {}
+            for key, value in raw.items():
+                # pandas/numpy scalars expose item(); convert them before JSON.
+                row[str(key)] = value.item() if hasattr(value, "item") else value
+            incoming[task_id] = row
+        if not incoming:
+            return 0, 0
+
+        with self.store._locked():
+            existing: dict[str, dict[str, Any]] = {}
+            if self.samples_path.exists():
+                with open(self.samples_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        row = json.loads(line)
+                        task_id = str(row.get("task_id", "") or "")
+                        if task_id:
+                            existing[task_id] = row
+
+            added = sum(task_id not in existing for task_id in incoming)
+            updated = sum(
+                task_id in existing and existing[task_id] != row
+                for task_id, row in incoming.items()
+            )
+            if not added and not updated:
+                return 0, 0
+
+            existing.update(incoming)
+            ordered = sorted(
+                existing.values(),
+                key=lambda row: (str(row.get("entry_date", "")), str(row.get("task_id", ""))),
+            )
+            tmp = self.samples_path.with_suffix(".jsonl.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for row in ordered:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            os.replace(tmp, self.samples_path)
+        return added, updated
+
+    def load_samples(self) -> list[dict[str, Any]]:
+        if not self.samples_path.exists():
+            return []
+        with self.store._locked():
+            with open(self.samples_path, "r", encoding="utf-8") as f:
+                return [json.loads(line) for line in f if line.strip()]
+
+    @staticmethod
+    def _comparable_rule_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+        # generated_for_date is audit context, not evidence.  If no label has
+        # newly matured, advancing to another decision date must be a no-op.
+        return {k: v for k, v in metadata.items() if k != "generated_for_date"}
+
+    def _sync_rolling_rules(
+        self, rules: Sequence[ValidatedRule], as_of_date: str
+    ) -> list[str]:
+        """Make rolling-statistical records exactly match the validated set."""
+        existing_records = [
+            record
+            for record in self.store.all_records()
+            if record.metadata.get("source") == "rolling_statistical"
+        ]
+        existing: dict[str, MemoryRecord] = {}
+        duplicates: list[MemoryRecord] = []
+        for record in existing_records:
+            rule_id = str(record.metadata.get("rule_id", "") or "")
+            if rule_id and rule_id not in existing:
+                existing[rule_id] = record
+            else:
+                duplicates.append(record)
+
+        desired = {rule.rule_id: rule for rule in rules}
+        source_task = f"rolling_{normalize_date(as_of_date)}"
+        ops: list[str] = []
+
+        for record in duplicates:
+            if self.store.delete(
+                record.id, source_task=source_task, reason="duplicate rolling rule id"
+            ):
+                ops.append(f"DELETE duplicate {record.id[:8]}")
+
+        for rule_id, record in existing.items():
+            if rule_id not in desired and self.store.delete(
+                record.id,
+                source_task=source_task,
+                reason="rolling rule failed current temporal validation",
+            ):
+                ops.append(f"DELETE {rule_id}")
+
+        for rule_id, rule in desired.items():
+            record = existing.get(rule_id)
+            if record is None:
+                self.store.add(
+                    rule.content,
+                    metadata=rule.metadata,
+                    source_task=source_task,
+                )
+                ops.append(f"ADD {rule_id}: {rule.content[:60]}")
+                continue
+
+            same_content = record.content == rule.content
+            same_metadata = self._comparable_rule_metadata(
+                record.metadata
+            ) == self._comparable_rule_metadata(rule.metadata)
+            if same_content and same_metadata:
+                continue
+            self.store.update(
+                record.id,
+                rule.content,
+                metadata_patch=rule.metadata,
+                source_task=source_task,
+            )
+            ops.append(f"UPDATE {rule_id}: {rule.content[:60]}")
+
+        if rules and not ops:
+            return [f"UNCHANGED: {len(rules)} validated rolling rules"]
+        return ops
+
+    def refresh_rolling(
+        self,
+        as_of_date: str,
+        config: Mapping[str, Any] | None = None,
+    ) -> list[str]:
+        """Mine all matured samples and synchronize the validated rule set."""
+        rule_config = RollingRuleConfig.from_mapping(config)
+        rules = mine_rolling_rules(self.load_samples(), as_of_date, rule_config)
+        return self._sync_rolling_rules(rules, as_of_date)
+
+    def rolling_snapshot(self, as_of_date: str) -> dict[str, int]:
+        """Return point-in-time sample/month/rule counts for prompt guardrails."""
+        cutoff = normalize_date(as_of_date)
+        if not cutoff:
+            return {"samples": 0, "months": 0, "rules": 0}
+        eligible: dict[str, dict[str, Any]] = {}
+        for row in self.load_samples():
+            task_id = str(row.get("task_id", "") or "")
+            exit_date = normalize_date(row.get("exit_date"))
+            if task_id and exit_date and exit_date <= cutoff:
+                eligible[task_id] = row
+        months = {
+            normalize_month(row.get("entry_month") or row.get("entry_date"))
+            for row in eligible.values()
+        }
+        months.discard("")
+        rules = sum(
+            record.metadata.get("source") == "rolling_statistical"
+            and (
+                not normalize_date(record.metadata.get("available_after"))
+                or normalize_date(record.metadata.get("available_after")) <= cutoff
+            )
+            for record in self.store.all_records()
+        )
+        return {"samples": len(eligible), "months": len(months), "rules": rules}
+
     def save_note(self, content: str, tags: list[str], as_of_month: str = "") -> MemoryRecord:
         """Agent-initiated note (MCP memory_save). Notes without a month are
         never visible under a before_month filter (fail-safe against leakage)."""
@@ -400,43 +594,66 @@ class Mem0Memory:
     def outcomes_path(self):
         return self.store.store_dir / f"{self.store.namespace}_outcomes.jsonl"
 
-    def log_outcome(self, task_id: str, month: str, predicted: str, judge_result: str) -> None:
-        """Append one judged prediction to the calibration ledger (idempotent per task)."""
+    def log_outcome(
+        self,
+        task_id: str,
+        month: str,
+        predicted: str,
+        judge_result: str,
+        available_after: str = "",
+    ) -> None:
+        """Upsert one judged prediction into the calibration ledger.
+
+        ``available_after`` is the label's exit date.  Exact-date filtering in
+        ``calibration_block`` prevents a 20-day outcome from being used merely
+        because its entry month is earlier than the current task month.
+        """
         if judge_result not in ("CORRECT", "INCORRECT") or predicted not in ("跑赢", "跑输"):
             return
+        record = {
+            "task_id": task_id,
+            "month": normalize_month(month),
+            "predicted": predicted,
+            "judge_result": judge_result,
+            "available_after": normalize_date(available_after),
+        }
         with self.store._locked():
-            seen: set[str] = set()
+            rows: list[dict[str, Any]] = []
             if self.outcomes_path.exists():
                 with open(self.outcomes_path, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line:
-                            seen.add(json.loads(line).get("task_id", ""))
-            if task_id in seen:
+                            rows.append(json.loads(line))
+            existing = next((row for row in rows if row.get("task_id") == task_id), None)
+            if existing == record:
                 return
-            with open(self.outcomes_path, "a", encoding="utf-8") as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "task_id": task_id,
-                            "month": month,
-                            "predicted": predicted,
-                            "judge_result": judge_result,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
+            if existing is None:
+                rows.append(record)
+            else:
+                rows = [record if row.get("task_id") == task_id else row for row in rows]
+            tmp = self.outcomes_path.with_suffix(".jsonl.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            os.replace(tmp, self.outcomes_path)
 
-    def calibration_block(self, before_month: str, min_samples: int = 16) -> str:
+    def calibration_block(
+        self,
+        before_month: str,
+        min_samples: int = 16,
+        before_date: str = "",
+    ) -> str:
         """Self-calibration stats over past months' judged predictions.
 
         The agent's own bias is the one large-sample, measurable signal in past
         outcomes (unlike n=1 episodic lessons). Direction-neutral by design: it
         reports the agent's error profile, never any stock's future direction.
         """
-        if not before_month or not self.outcomes_path.exists():
+        if not (before_month or before_date) or not self.outcomes_path.exists():
             return ""
+        month_cutoff = normalize_month(before_month or before_date)
+        date_cutoff = normalize_date(before_date)
         rows: list[dict[str, str]] = []
         with open(self.outcomes_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -444,7 +661,14 @@ class Mem0Memory:
                 if not line:
                     continue
                 r = json.loads(line)
-                if r.get("month") and r["month"] < before_month:
+                available_after = normalize_date(r.get("available_after"))
+                if date_cutoff and available_after:
+                    visible = available_after <= date_cutoff
+                elif available_after and month_cutoff:
+                    visible = normalize_month(available_after) < month_cutoff
+                else:
+                    visible = bool(r.get("month")) and normalize_month(r["month"]) < month_cutoff
+                if visible:
                     rows.append(r)
         if len(rows) < min_samples:
             return ""
@@ -467,7 +691,7 @@ class Mem0Memory:
             return f"{x / d * 100:.0f}%" if d else "-"
 
         lines = [
-            f"### 自我校准统计（基于你此前 {n} 次已判题预测，仅含 {before_month} 之前的月份）",
+            f"### 自我校准统计（基于你此前 {n} 次已到期预测，截止 {before_date or before_month}）",
             f"- 你的预测分布：跑输 {pred_counts['跑输']} 次（{pct(pred_counts['跑输'], n)}）、"
             f"跑赢 {pred_counts['跑赢']} 次（{pct(pred_counts['跑赢'], n)}）",
             f"- 分方向命中率：预测「跑输」命中 {pct(hits['跑输'], pred_counts['跑输'])}"
@@ -480,6 +704,79 @@ class Mem0Memory:
         ]
         return "\n".join(lines)
 
+    def reliability_block(
+        self,
+        before_month: str,
+        min_samples: int = 16,
+        before_date: str = "",
+    ) -> str:
+        """Direction-free reliability summary over matured predictions.
+
+        Unlike ``calibration_block``, this intentionally omits prediction and
+        label direction counts.  Those counts can become a prompt anchor even
+        when the accompanying prose asks the model to correct the bias.
+        """
+        if not (before_month or before_date) or not self.outcomes_path.exists():
+            return ""
+        month_cutoff = normalize_month(before_month or before_date)
+        date_cutoff = normalize_date(before_date)
+        rows: list[dict[str, str]] = []
+        with open(self.outcomes_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                available_after = normalize_date(row.get("available_after"))
+                if date_cutoff and available_after:
+                    visible = available_after <= date_cutoff
+                elif available_after and month_cutoff:
+                    visible = normalize_month(available_after) < month_cutoff
+                else:
+                    visible = bool(row.get("month")) and (
+                        normalize_month(row["month"]) < month_cutoff
+                    )
+                if visible:
+                    rows.append(row)
+        if len(rows) < min_samples:
+            return ""
+
+        correct = sum(row.get("judge_result") == "CORRECT" for row in rows)
+        accuracy = correct / len(rows)
+        return "\n".join(
+            [
+                (
+                    "### 历史可靠性提示"
+                    f"（基于此前 {len(rows)} 次已到期预测，截止 {before_date or before_month}）"
+                ),
+                f"- 历史总体命中率：{correct}/{len(rows)}（{accuracy:.0%}）。",
+                "- 该统计只描述方法可靠性，不提供任何方向先验；"
+                "当历史命中率接近随机时应降低置信度，并以当前任务的点时工具证据为准。",
+                "- 不得根据历史预测数量或标签数量默认选择任一方向。",
+            ]
+        )
+
+    def has_vector_memories(
+        self,
+        before_month: str = "",
+        before_date: str = "",
+    ) -> bool:
+        """Whether a temporally visible validated/vector memory exists."""
+        month_cutoff = normalize_month(before_month or before_date)
+        date_cutoff = normalize_date(before_date)
+        for record in self.store.all_records():
+            available_after = normalize_date(record.metadata.get("available_after"))
+            if date_cutoff and available_after:
+                visible = available_after <= date_cutoff
+            elif available_after and month_cutoff:
+                visible = normalize_month(available_after) < month_cutoff
+            else:
+                entry_month = normalize_month(record.metadata.get("entry_month"))
+                visible = bool(entry_month) and bool(month_cutoff) and entry_month < month_cutoff
+            if visible:
+                return True
+        return False
+
     # ------------------------------------------------------------ search path
 
     def search(
@@ -487,14 +784,52 @@ class Mem0Memory:
         query: str,
         top_k: int = 3,
         before_month: str = "",
+        before_date: str = "",
         stance_balance: bool = True,
     ) -> list[tuple[MemoryRecord, float]]:
+        month_cutoff = normalize_month(before_month or before_date)
+        date_cutoff = normalize_date(before_date)
+
         def predicate(rec: MemoryRecord) -> bool:
-            if not before_month:
+            if not (month_cutoff or date_cutoff):
                 return True
-            month = str(rec.metadata.get("entry_month", "") or "")
-            # Records with unknown month are hidden under temporal filtering.
-            return bool(month) and month < before_month
+            available_after = normalize_date(rec.metadata.get("available_after"))
+            if date_cutoff and available_after:
+                return available_after <= date_cutoff
+            if available_after and month_cutoff:
+                return normalize_month(available_after) < month_cutoff
+            month = normalize_month(rec.metadata.get("entry_month"))
+            # Records with unknown availability are hidden under filtering.
+            return bool(month) and bool(month_cutoff) and month < month_cutoff
+
+        if top_k <= 0:
+            return []
+
+        # Validated rolling rules are few (max three) and their relevance is
+        # condition-based, not semantic.  Pin them ahead of vector matches so
+        # a generic stock-name embedding cannot hide the statistical rules.
+        all_records = self.store.all_records()
+        if not all_records:
+            return []
+        rolling = [
+            rec
+            for rec in all_records
+            if rec.metadata.get("source") == "rolling_statistical" and predicate(rec)
+        ]
+        rolling.sort(
+            key=lambda rec: (
+                float(rec.metadata.get("q_value", 1.0)),
+                -float(rec.metadata.get("validation_lift", 0.0)),
+                -int(rec.metadata.get("validation_support", 0)),
+            )
+        )
+        picked: list[tuple[MemoryRecord, float]] = [
+            (rec, max(0.0, 1.0 - float(rec.metadata.get("q_value", 1.0))))
+            for rec in rolling[:top_k]
+        ]
+        rolling_ids = {rec.id for rec in rolling}
+        if len(picked) >= top_k or all(rec.id in rolling_ids for rec in all_records):
+            return picked[:top_k]
 
         try:
             wide = self.store.search(
@@ -502,16 +837,16 @@ class Mem0Memory:
             )
         except Exception as exc:
             print(f"    memory search failed (no injection): {exc}")
-            return []
+            return picked
 
-        if not stance_balance or len(wide) <= top_k:
-            return wide[:top_k]
+        wide = [(rec, score) for rec, score in wide if rec.id not in rolling_ids]
+        if not stance_balance:
+            return (picked + wide)[:top_k]
 
         # Tight quota: at most ~1/3 of slots per directional stance (1 bullish
         # + 1 bearish at top_k=3). ceil(top_k/2) still let 2-vs-1 tilts through,
         # which compounded over months in the mem0 v1 run.
         max_per_stance = max(1, top_k // 3)
-        picked: list[tuple[MemoryRecord, float]] = []
         counts: Counter = Counter()
         deferred: list[tuple[MemoryRecord, float]] = []
         for rec, score in wide:
@@ -538,7 +873,14 @@ class Mem0Memory:
             tags = rec.metadata.get("tags", [])
             tag_str = ", ".join(tags) if tags else "none"
             month = rec.metadata.get("entry_month", "") or "?"
-            lines.append(
-                f"{i}. [score={score:.3f}|来源月={month}|tags={tag_str}] {rec.content}"
-            )
+            if rec.metadata.get("source") == "rolling_statistical":
+                lines.append(
+                    f"{i}. [大样本验证|q={rec.metadata.get('q_value', '?')}|"
+                    f"验证n={rec.metadata.get('validation_support', '?')}|"
+                    f"截至={rec.metadata.get('available_after', '?')}] {rec.content}"
+                )
+            else:
+                lines.append(
+                    f"{i}. [score={score:.3f}|来源月={month}|tags={tag_str}] {rec.content}"
+                )
         return "\n".join(lines)

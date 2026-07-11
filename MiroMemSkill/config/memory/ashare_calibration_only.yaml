@@ -1,0 +1,20 @@
+# Deterministic ablation: legacy directional calibration text only.
+# It reads the completed v3 ledger point-in-time but never mutates that ledger.
+enabled: true
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_mem0v3"
+inject_top_k: 0
+skill_top_k: 0
+skill_enabled: false
+inject_enabled: false
+calibration_enabled: true
+calibration_mode: "legacy"
+calibration_min_samples: 64
+reflection_enabled: false
+reflection_mode: "none"
+outcome_logging_enabled: false
+feature_evidence_enabled: false
+expose_memory_search: "never"
+expose_memory_save: false
+embedding_model: "embedding-3"

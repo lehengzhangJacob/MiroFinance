@@ -19,6 +19,9 @@ mcp = FastMCP("memskill-mcp-server")
 _STORE_DIR = os.environ.get("MEMSKILL_STORE_DIR", "memory_bank")
 _NAMESPACE = os.environ.get("MEMSKILL_NAMESPACE", "default")
 _SKILLS_DIR = os.environ.get("MEMSKILL_SKILLS_DIR", f"{_STORE_DIR}/skills")
+_ALLOW_SAVE = os.environ.get("MEMSKILL_ALLOW_SAVE", "true").lower() in {
+    "1", "true", "yes", "on"
+}
 
 _memory: Mem0Memory | None = None
 _skills: SkillLibrary | None = None
@@ -39,7 +42,12 @@ def _get_skills() -> SkillLibrary:
 
 
 @mcp.tool()
-def memory_search(query: str, top_k: int = 5, before_month: str = "") -> str:
+def memory_search(
+    query: str,
+    top_k: int = 5,
+    before_month: str = "",
+    before_date: str = "",
+) -> str:
     """Search stored past experiences and notes for relevant lessons.
 
     Args:
@@ -48,10 +56,18 @@ def memory_search(query: str, top_k: int = 5, before_month: str = "") -> str:
         before_month: Point-in-time guard, format YYYY-MM. For prediction tasks
             ALWAYS pass the task's current month so only lessons learned from
             strictly earlier market months are returned (avoids look-ahead).
+        before_date: Preferred exact point-in-time guard, format YYYYMMDD. Pass
+            the task's as-of date so 20-day labels are visible only after their
+            actual exit date.
     """
     try:
         memory = _get_memory()
-        results = memory.search(query, top_k=top_k, before_month=before_month)
+        results = memory.search(
+            query,
+            top_k=top_k,
+            before_month=before_month,
+            before_date=before_date,
+        )
         return memory.format_results(results)
     except Exception as exc:
         return f"Memory search unavailable: {exc}"
@@ -68,6 +84,8 @@ def memory_save(content: str, tags: str = "", as_of_month: str = "") -> str:
             for the note to be retrievable in point-in-time filtered searches.
     """
     try:
+        if not _ALLOW_SAVE:
+            return "Memory save disabled: this namespace accepts validated rolling rules only."
         memory = _get_memory()
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
         rec = memory.save_note(content, tags=tag_list, as_of_month=as_of_month)

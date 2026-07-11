@@ -24,7 +24,7 @@ MiroMemSkill/memory_bank/skills_ashare/*/outputs/
 
 # External reference clones / separate remotes (do not nest in MiroFinance)
 Mem0/
-report/
+# report/ tracked in-repo (midterm plan, ACL templates)
 
 # Hermes validation runtime logs
 hermes-agent-self-evolution_validation/logs/

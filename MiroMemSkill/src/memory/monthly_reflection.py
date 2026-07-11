@@ -41,18 +41,23 @@ def _window_return(closes: pd.Series, periods: int) -> float | None:
 
 
 def _trailing_percentile(series: pd.Series) -> float | None:
-    series = series.dropna().astype(float).tail(120)
-    if series.empty:
+    # The percentile must describe the value on the decision date.  Dropping
+    # nulls before taking the latest value silently reused stale PE values for
+    # loss-making companies whose current PE(TTM) is undefined.
+    series = pd.to_numeric(series, errors="coerce").tail(120)
+    if series.empty or pd.isna(series.iloc[-1]):
         return None
-    return float((series <= series.iloc[-1]).mean() * 100)
+    latest = float(series.iloc[-1])
+    history = series.dropna()
+    return float((history <= latest).mean() * 100)
 
 
-def compute_month_features(
+def compute_month_feature_rows(
     entry_date: str,
     stocks: list[dict[str, Any]],
     data_dir: str | Path = DEFAULT_DATA_DIR,
-) -> tuple[str, int]:
-    """Build the month's cross-sectional table.
+) -> list[dict[str, Any]]:
+    """Build structured point-in-time rows for one monthly cross-section.
 
     Args:
         entry_date: Decision date as YYYYMMDD (the month's first trading day).
@@ -60,9 +65,8 @@ def compute_month_features(
             {ts_code, stock_name, label, predicted, judge_result}.
         data_dir: Benchmark data cache directory.
 
-    Returns:
-        (csv_table, n_rows). Rows with entirely missing features still appear
-        (features blank) so the reflector sees the full pool.
+    Rows with entirely missing features still appear so the rolling sample
+    ledger preserves the full cross-section.
     """
     data_dir = Path(data_dir)
     entry_date = str(entry_date)
@@ -120,6 +124,16 @@ def compute_month_features(
         )
         rows.append(row)
 
+    return rows
+
+
+def compute_month_features(
+    entry_date: str,
+    stocks: list[dict[str, Any]],
+    data_dir: str | Path = DEFAULT_DATA_DIR,
+) -> tuple[str, int]:
+    """Build the legacy CSV table used by the v2 monthly LLM reflector."""
+    rows = compute_month_feature_rows(entry_date, stocks, data_dir=data_dir)
     table = pd.DataFrame(rows, columns=_FEATURE_COLUMNS)
     table = table.sort_values(["label", "ts_code"]).reset_index(drop=True)
     return table.to_csv(index=False), len(table)

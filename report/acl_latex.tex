@@ -1,0 +1,302 @@
+% !TEX program = xelatex
+% ============================================================
+% 浙江大学软件学院智能计算与安全组 · 实践考核研究报告
+% 基于 MiroFlow 的金融自进化智能体：记忆与技能机制的设计与评测
+%
+% 编译说明：本文件包含中文，必须用 XeLaTeX 编译。
+%   Overleaf: Menu -> Settings -> Compiler -> XeLaTeX
+%   本地:     xelatex acl_latex.tex && bibtex acl_latex && xelatex x2
+% ============================================================
+\documentclass[11pt]{article}
+
+% preprint 模式：非匿名、带页码（考核报告用；投稿才用 review/final）
+\usepackage[preprint]{acl}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{array}
+
+% ---------- 中文支持（XeLaTeX + xeCJK，Noto 字体 Overleaf 自带） ----------
+\usepackage{fontspec}
+\setmainfont{TeX Gyre Termes}          % 西文近似 Times
+\usepackage{xeCJK}
+\setCJKmainfont{Noto Serif CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans Mono CJK SC}
+
+% 占位标记：待实验完成后替换
+\newcommand{\pending}[1]{\textcolor{gray}{\textit{（#1）}}}
+
+\title{基于 MiroFlow 的金融自进化智能体：\\记忆与技能机制的设计与评测}
+
+\author{张乐衡 \\
+  浙江大学软件学院（实践考核） \\
+  \texttt{lehengzhangjacob@gmail.com}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+通用智能体框架 MiroFlow 在推理阶段缺乏非结构化知识留存能力：跨任务经验既不会沉淀，也无法在后续推理中被检索复用。本报告在 MiroFlow 之上引入记忆（memory）与技能（skill）机制，构建了支持“外部工具—情景记忆—程序性技能”联动调用的智能体 MiroMemSkill，并将其迁移至 A 股市场资产定价任务上进行定量验证。我们设计了一个点时（point-in-time）安全的月度超额收益方向预测基准：16 只 A 股 $\times$ 12 个月度决策日共 192 个预测任务，数据服务层按 as-of 日期硬截断以杜绝前视偏差；同时构建了从无信息基线、规则与统计基线、机器学习基线到智能体对照臂的分层基线体系，并以命中率、双向召回、组合回测多维度评价。实验部分对比了有无记忆与技能机制的两个智能体臂，并给出消融分析。\pending{摘要中的结论数字待 pool~v4 两臂实验完成后填入}
+\end{abstract}
+
+% ============================================================
+\section{引言与任务理解}
+\label{sec:intro}
+
+\pending{本节待完整撰写：MiroFlow 的定位与缺陷、引入 memory/skill 的动机、金融预测作为评测场景的适配性、本报告的贡献点清单}
+
+考核任务要求（i）针对 MiroFlow~\citep{miroflow2025} 缺乏非结构化知识留存的缺陷重构其认知逻辑，引入 memory 与 skill 机制；（ii）将改进后的框架迁移至 A 股资产定价任务做基准回测，定量与定性验证两个模块；（iii）自选路径进一步提升效果（如借鉴 hermes-agent-self-evolution~\citep{hermes2025} 的自进化路线）。本报告围绕这三点展开，其中评测体系的构建依据在第~\ref{sec:eval}~节详细论述。
+
+% ============================================================
+\section{系统架构：MiroFlow 分析与改进方案}
+\label{sec:arch}
+
+\subsection{MiroFlow 原始架构与缺陷分析}
+\pending{待撰写：MiroFlow 的 orchestrator--worker 结构、MCP 工具调用协议、上下文生命周期；核心缺陷——任务间无状态，经验随上下文销毁}
+
+\subsection{记忆机制：情景记忆库与反思写入}
+\pending{待撰写：MemoryStore 的 BM25 检索与立场均衡注入（search\_balanced）、MemoryReflector 的判分后反思蒸馏、去重与反向教训设计}
+
+\subsection{技能机制：程序性技能库与路由}
+\pending{待撰写：SKILL.md 结构（frontmatter triggers + 正文）、关键词/嵌入混合路由、Top Skill Preview 与 skill\_load 两级加载、打包技能（qlib\_skill / tushare\_skill）的工具化改造}
+
+\subsection{工具—记忆—技能联动的推理流程}
+\pending{待撰写：任务注入块的构造（context.py）、推理期 memory\_search / skill\_load 的按需调用、post-task 反思闭环}
+
+% ============================================================
+\section{评测体系的构建依据}
+\label{sec:eval}
+
+评测体系的设计目标是：在一个 LLM 无法靠参数记忆或标签偏斜“蒙对”的环境里，可复现地度量 memory 与 skill 机制带来的增量。本节依次说明任务形式化、点时数据层、股票池构建、基线体系、指标体系、判分机制与防泄漏分析七个方面的构建依据。
+
+\subsection{任务定义与形式化}
+\label{sec:eval-task}
+
+评测任务为\textbf{月度超额收益方向预测}。设股票 $i$ 在决策日 $t$（每个自然月的首个交易日，收盘后决策）的前复权收盘价为 $P_i(t)$，持有期为 $H=20$ 个交易日，则区间收益率为
+\begin{equation}
+r_{i,t} = \frac{P_i(t{+}H)}{P_i(t)} - 1,
+\end{equation}
+其中 $t{+}H$ 按交易日历推进。以沪深 300 指数（000300.SH）同期收益 $r_{m,t}$ 为基准，任务标签定义为
+\begin{equation}
+y_{i,t} =
+\begin{cases}
+\text{跑赢}, & r_{i,t} - r_{m,t} > 0,\\[2pt]
+\text{跑输}, & \text{否则}.
+\end{cases}
+\label{eq:label}
+\end{equation}
+
+智能体在决策日只能使用 as-of 截断的数据工具，最终必须输出二值结论 \texttt{\textbackslash boxed\{跑赢\}} 或 \texttt{\textbackslash boxed\{跑输\}}。评测窗口为 2024-07 至 2025-06 共 12 个月度决策日，股票池 16 只（见~\ref{sec:eval-pool}~节），合计 $16 \times 12 = 192$ 个任务。任务由 \texttt{scripts/ashare/gen\_tasks.py} 从本地行情缓存确定性生成，标签在生成时由式~(\ref{eq:label})~直接计算，不依赖任何模型。
+
+选择该任务形式的依据有三：(1)~\textbf{相对方向而非绝对涨跌}——对冲了市场整体贝塔，考察的是横截面选股信息，而非对指数的择时；(2)~\textbf{二值输出}——判分可做到近乎确定性（\ref{sec:eval-judge}~节），排除主观评分噪声；(3)~\textbf{月度滚动多任务}——同一智能体连续经历 12 个决策期，恰好构成 memory 机制“经验积累—复用”的最小闭环，使记忆的边际贡献可以随时间被观察。
+
+\subsection{点时数据服务层}
+\label{sec:eval-data}
+
+金融回测最主要的效度威胁是\textbf{前视偏差}（look-ahead bias）。本评测把防泄漏做在\textbf{数据服务层}而非提示词层：所有行情访问都通过自建的 MCP 工具完成，每个工具都要求显式 \texttt{as\_of} 参数并在服务端硬截断，智能体在协议上不可能取到决策日之后的数据。工具清单与点时约束见表~\ref{tab:tools}。
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}p{0.30\columnwidth}p{0.60\columnwidth}@{}}
+\toprule
+\textbf{工具} & \textbf{返回内容与点时约束} \\
+\midrule
+stock\_info & 股票池名单与基准指数（静态） \\
+price\_history & 个股前复权日线；\texttt{trade\_date} $\le$ \texttt{as\_of} \\
+index\_history & 沪深 300 日线；同上 \\
+valuation & PE-TTM/PB/换手率/市值及滚动分位；同上 \\
+financials & 财务指标；按\textbf{公告日} \texttt{ann\_date} $\le$ \texttt{as\_of} 截断 \\
+ml\_signal & qlib 逐月 walk-forward 模型分数与池内排名；\texttt{entry\_date} $\le$ \texttt{as\_of} \\
+\bottomrule
+\end{tabular}
+\caption{点时数据工具（前缀 \texttt{ashare\_} 略）。行情底层为 Tushare Pro 本地缓存（2023-01 至 2025-07）~\citep{tushare}，价格为前复权口径，财务数据按公告日而非报告期截断，避免“财报未发先知”。}
+\label{tab:tools}
+\end{table}
+
+两处细节值得说明。其一，财务工具按\textbf{公告日}过滤：报告期 2024Q1 的财报若在 2024-04-29 公告，则 as-of 为 2024-04-01 的任务不可见——这是实践中最常被忽略的泄漏通道。其二，前复权基准取数据末端复权因子，保证跨除权除息日的持有期收益可以直接由价格相除得到，与标签计算口径一致。
+
+\subsection{股票池构建与标签平衡}
+\label{sec:eval-pool}
+
+股票池设计经历了一次关键迭代，其动因本身构成评测方法论的一部分，故完整记录如下。
+
+\paragraph{初版池（pool v3）的隐性缺陷。}
+初版池为 12 只、覆盖 8 个行业的 A 股（表~\ref{tab:pool}~上半部分），按“主板/创业板/科创板混合、沪深 300 成分占少数、前期赢家与输家各半”的事前规则构造。然而事后统计发现，该池在评测窗口内\textbf{整体系统性跑输沪深 300}：144 个任务中标签为跑输的占 81 个（56.25\%），单任务平均超额收益 $-0.43\%$；纯多头组合 12 个月累计 $+7.82\%$，同期指数 $+15.92\%$。这使得“全猜跑输”的无信息策略不仅命中率达 56.25\%，对冲后累计超额还有 $+4.77\%$（而“全猜跑赢”为 $-5.55\%$）。在这样的池子上，命中率指标退化为“是否学会了池子的方向偏差”，无法反映选股能力——这是单看命中率绝对值时极易被掩盖的评测缺陷。
+
+\paragraph{池扩充（pool v4）与标签再平衡。}
+修复方案是向池中补入评测窗口内\textbf{典型跑赢}指数的股票，把标签分布拉回均衡，而不改动标签定义本身。候选股按可复核的量化规则筛选：用与任务完全相同的 12 个月度 20 交易日窗口，逐一统计候选相对沪深 300 的跑赢月数，仅保留跑赢 $\ge 8/12$ 且行业上与存量池不重叠的标的，最终入池 4 只（表~\ref{tab:pool}~下半部分）。扩充后 192 个任务的标签为跑赢 97 / 跑输 95，多数类基线被压至 50.52\%（表~\ref{tab:labels}），任何显著高于 50\% 的命中率都必须来自真实的横截面区分能力。
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{代码} & \textbf{名称} & \textbf{行业} & \textbf{跑赢月数} \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{存量池（pool v3，12 只）}} \\
+603259.SH & 药明康德 & 医药外包 & 8/12 \\
+601899.SH & 紫金矿业 & 有色金属 & 7/12 \\
+603345.SH & 安井食品 & 速冻食品 & 7/12 \\
+601155.SH & 新城控股 & 房地产 & 6/12 \\
+688169.SH & 石头科技 & 智能清洁电器 & 6/12 \\
+601021.SH & 春秋航空 & 航空 & 5/12 \\
+300012.SZ & 华测检测 & 检测服务 & 5/12 \\
+688005.SH & 容百科技 & 锂电材料 & 5/12 \\
+002415.SZ & 海康威视 & 安防 & 4/12 \\
+002507.SZ & 涪陵榨菜 & 食品 & 4/12 \\
+002508.SZ & 老板电器 & 厨电 & 3/12 \\
+601233.SH & 桐昆股份 & 化纤 & 3/12 \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{扩充（pool v4 新增，4 只）}} \\
+688981.SH & 中芯国际 & 晶圆代工 & 9/12 \\
+300476.SZ & 胜宏科技 & PCB & 9/12 \\
+002371.SZ & 北方华创 & 半导体设备 & 8/12 \\
+600418.SH & 江淮汽车 & 汽车 & 8/12 \\
+\bottomrule
+\end{tabular}
+\caption{股票池构成。“跑赢月数”为 2024-07 至 2025-06 的 12 个月度 20 交易日窗口中，相对沪深 300 超额收益为正的月数。}
+\label{tab:pool}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+ & \textbf{pool v3} & \textbf{pool v4} \\
+\midrule
+任务数 & 144 & 192 \\
+跑赢标签 & 63（43.8\%） & 97（50.5\%） \\
+跑输标签 & 81（56.2\%） & 95（49.5\%） \\
+多数类基线命中率 & 56.25\% & \textbf{50.52\%} \\
+“全猜跑输”累计超额 & $+4.77\%$ & $\approx 0$ \\
+\bottomrule
+\end{tabular}
+\caption{池迭代前后的标签分布。pool v4 将多数类基线压回 50\% 附近，命中率重新获得区分选股能力的效力。}
+\label{tab:labels}
+\end{table}
+
+\paragraph{设计权衡的说明。}
+需要坦承，补入标的的筛选使用了评测窗口内的已实现表现，因此 pool v4 不是一个可事前构造的投资域；但评测的分析单元是\textbf{逐任务的点时预测}（智能体在每个决策日仍只能看到 as-of 之前的数据），池成分选择不向任何单个任务泄漏未来信息，只改变标签的边际分布。作为 benchmark 构造手段，这一权衡以牺牲“池子的可投资性”换取“指标的可解释性”，我们认为对方法学评测是值得的，并在此明确记录。
+
+\subsection{分层基线体系}
+\label{sec:eval-baseline}
+
+单一基线无法定位性能来源，本评测构建了五层基线（表~\ref{tab:baselines}），层与层之间的差值各自回答一个归因问题：无信息基线锚定标签分布的“地板”；规则与统计基线给出传统数量化方法的水位；机器学习基线（qlib~\citep{qlib2020} 的 LightGBM~\citep{lightgbm2017}+Alpha158，\textbf{逐月 walk-forward 重训}，每月仅用标签在该决策日前已完全结算的样本训练）给出结构化 ML 的水位，同时其逐月分数经 \texttt{ashare\_ml\_signal} 工具以点时方式开放给智能体调用；两个智能体臂之间仅相差 memory/skill 模块，其差值即为本研究要验证的增量。
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}p{0.34\columnwidth}p{0.56\columnwidth}@{}}
+\toprule
+\textbf{基线} & \textbf{构建依据与归因作用} \\
+\midrule
+全做多 / 全做空 / 随机（200 次均值） & 无信息地板；直接暴露标签不平衡与方向坍缩 \\
+20 日相对动量规则 & 最简单价类因子；智能体至少应利用到该信息 \\
+ARIMA（点时拟合） & 经典统计时序基线，仅参考 \\
+qlib LGBM+Alpha158（walk-forward） & 结构化 ML 水位；亦作为智能体的工具输入 \\
+MiroFlow 原版智能体 & 同一 LLM、同一工具集、无 memory/skill 的对照臂 \\
+MiroMemSkill（本文） & 实验臂；与上一行的差值即模块增量 \\
+\bottomrule
+\end{tabular}
+\caption{分层基线体系。所有规则/统计/ML 基线与智能体使用同一份点时数据，保证可比性。}
+\label{tab:baselines}
+\end{table}
+
+\subsection{指标体系}
+\label{sec:eval-metric}
+
+指标设计针对二值金融预测的两个已知陷阱。
+
+\paragraph{防标签偏斜：命中率对照多数类读数。}
+所有命中率一律与同期多数类基线并列汇报，绝不以 50\% 为参照。此外汇报分类别召回与平衡准确率
+\begin{equation}
+\mathrm{BAcc} = \tfrac{1}{2}\big(\mathrm{Recall}_{\text{跑赢}} + \mathrm{Recall}_{\text{跑输}}\big),
+\end{equation}
+无效输出计为漏判。任何“全押一边”的退化策略在 BAcc 上都只有 50\%，方向坍缩无法靠标签偏斜掩盖。
+
+\paragraph{防“统计显著、经济无效”：组合回测。}
+将逐任务预测映射为月度组合：做多所有预测跑赢的股票（等权，收益记超额收益），并构造多空对冲（LS）组合——做多预测跑赢腿、做空预测跑输腿。汇报月度超额序列的累计收益、年化夏普（$\times\sqrt{12}$）与最大回撤。LS 指标的设计意图是：无选股信息的策略（如全做多）缺少一条腿、LS 记 0，因此该列只奖励\textbf{真实的横截面区分能力}。另设方向偏置诊断表（预测跑赢/跑输/无效计数），使预测分布的坍缩一目了然。
+
+\subsection{判分机制}
+\label{sec:eval-judge}
+
+输出约束为最后一行仅含 \texttt{\textbackslash boxed\{跑赢\}} 或 \texttt{\textbackslash boxed\{跑输\}}。判分先做精确字符串匹配（GAIA scorer），未命中的少数样本回落到 LLM 判分器。由于答案空间只有两个互斥中文词，实践中判分近乎确定性；被判为无效的输出（同时含两词或均不含）计为漏判而非随机记分，避免格式失败被洗白为对错各半。
+
+\subsection{防泄漏分析与协议局限}
+\label{sec:eval-leak}
+
+我们把泄漏面拆为三层逐一分析，并如实记录当前协议的已知局限。
+
+\paragraph{（一）数据层：已解决。}
+如~\ref{sec:eval-data}~节所述，所有市场数据在服务端按 as-of 硬截断，ML 信号逐月 walk-forward 生成，该层不存在前视通道。
+
+\paragraph{（二）模型参数记忆层：以提示约束缓解，无硬保证。}
+评测窗口（2024-07 至 2025-06）落在基座 LLM 训练截止之前的部分，模型参数中可能残留对个股后续走势的记忆。任务提示以强约束禁止使用工具之外的市场信息，但这属于软约束。当前运行中系统提示的日期为真实日期而非任务 as-of 日期，进一步削弱了“角色扮演在过去”的一致性——我们将其列为已知局限，改进方案（系统日期对齐 as-of）已在早期协议迭代中实现过，作为后续修订方向。
+
+\paragraph{（三）记忆反思层：存在时序泄漏，且仅影响实验臂。}
+当前协议下任务以\textbf{随机顺序并发}执行，每个任务判分后立即将反思教训写入记忆库，而记忆检索按语义相似度进行、\textbf{不带时间门槛}。这意味着一个 2025-02 任务的反思（其标签在 2025-03 才可观测）可能被注入到随后执行的 2024-07 任务中——尽管反思提示明确禁止写入具体答案与数字、只允许沉淀条件化启发式，这仍构成 meta 层面的时序泄漏。该通道只存在于带记忆的实验臂，因此解读结果时应注意：实验臂相对对照臂的增量中，可能混入此泄漏的贡献，其数值应视为\textbf{上界}。彻底的修复协议——按决策日时序分组执行、反思按标签结算日（exit date）设置禁运期（embargo）、检索加 as-of 过滤——已在早期迭代中实现并验证过可行性，作为本报告的消融方向之一\pending{若时间允许，将补充时序协议下的对照实验}。
+
+\paragraph{泄漏面小结。}
+数据层严格点时；参数记忆层软约束；记忆层在当前乱序协议下存在可识别、可修复的泄漏通道，已在结果解读与改进方向中如实标注。我们认为，明确列出泄漏面及其边界，比展示一个表面无懈可击的命中率更符合评测体系构建的初衷。
+
+% ============================================================
+\section{实验配置}
+\label{sec:setup}
+
+\pending{待撰写：基座模型 kimi-k2.6（temperature 1.0、max\_tokens 16000、max\_turns 12）、两臂配置差异表（工具集相同、仅 memory/skill 开关不同）、记忆命名空间隔离（ashare\_poolv4）、并发与重试、评测环境}
+
+% ============================================================
+\section{实验结果与消融分析}
+\label{sec:results}
+
+\subsection{主对比：MiroMemSkill vs.\ 基线体系}
+\pending{待填入：192 任务两臂完整对比表——命中率/BAcc/双向召回/组合回测指标，与表~\ref{tab:baselines} 各基线并列}
+
+\subsection{逐月表现与记忆积累曲线}
+\pending{待填入：逐月命中率与 LS 收益、记忆条目数随月份增长、检索命中对预测的影响}
+
+\subsection{消融实验}
+\pending{待填入：(a) 去掉 memory 注入；(b) 去掉 skill 注入；(c) 去掉 ashare\_ml\_signal 工具；(d) 时序协议 vs 乱序协议}
+
+\subsection{行为分析}
+\pending{待填入：方向偏置（预测跑赢/跑输分布）、工具调用统计（ml\_signal 覆盖率、skill\_load 频次与对象）、典型案例}
+
+% ============================================================
+\section{讨论与思考过程}
+\label{sec:discussion}
+
+\pending{待撰写：(1) 评测方法论的迭代史——从标签失衡的发现到池扩充的决策链；(2) 智能体的系统性偏空先验及其与 LLM 训练分布的关系；(3) 技能“可见但不主动加载”现象——工具化 vs 文档化技能的取舍；(4) 失败尝试记录}
+
+% ============================================================
+\section{结论}
+\label{sec:conclusion}
+
+\pending{待撰写：结论与后续工作（时序协议重跑、自进化闭环、多智能体扩展）}
+
+\section*{Limitations}
+
+本报告的评测局限已在~\ref{sec:eval-leak}~节详细展开：参数记忆层无硬性保证、当前乱序协议下记忆反思存在时序泄漏、pool v4 的构造使用了窗口内已实现表现。此外股票池规模（16 只）与窗口长度（12 个月）受数据与算力约束，统计功效有限，结论应视为机制验证而非可交易策略。
+
+% ============================================================
+\bibliography{custom}
+
+\appendix
+
+\section{完整实验配置}
+\label{sec:appendix-config}
+\pending{待填入：两臂完整 YAML 配置、工具 schema、记忆/技能库参数}
+
+\section{逐月明细结果}
+\label{sec:appendix-monthly}
+\pending{待填入：192 任务逐月命中/收益明细表}
+
+\section{提示词与技能文档样例}
+\label{sec:appendix-prompts}
+\pending{待填入：任务题面模板、记忆注入块样例、SKILL.md 样例}
+
+\end{document}

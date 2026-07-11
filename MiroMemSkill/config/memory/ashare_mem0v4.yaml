@@ -1,0 +1,48 @@
+# Memory v4: direction-free reliability plus post-tool feature evidence.
+#
+# Rolling rules keep the strict temporal/FDR gates from v3.  When no validated
+# rule exists, a local-neighbour signal is only exposed if its Wilson interval
+# excludes 50%; inconclusive label counts are withheld from the prompt.
+enabled: true
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_mem0v4"
+inject_top_k: 3
+skill_top_k: 3
+skill_enabled: true
+skill_preview_min_score: 2.0
+inject_enabled: true
+calibration_enabled: true
+calibration_mode: "reliability"
+calibration_min_samples: 64
+reflection_enabled: true
+reflection_mode: "rolling"
+outcome_logging_enabled: true
+embedding_model: "embedding-3"
+
+expose_memory_search: "auto"
+expose_memory_save: false
+
+feature_evidence_enabled: true
+feature_evidence_k: 12
+feature_evidence_min_neighbors: 8
+feature_evidence_min_pool: 32
+feature_evidence_min_common_features: 3
+feature_evidence_required_tools:
+  - ashare_price_history
+  - ashare_index_history
+  - ashare_valuation
+  - ashare_ml_signal
+
+rolling_min_samples: 64
+rolling_min_history_months: 6
+rolling_validation_months: 2
+rolling_min_train_support: 16
+rolling_min_validation_support: 8
+rolling_min_support_months: 4
+rolling_min_validation_months: 2
+rolling_min_accuracy: 0.60
+rolling_min_lift: 0.08
+rolling_min_month_consistency: 0.60
+rolling_fdr_q: 0.10
+rolling_max_rules: 3

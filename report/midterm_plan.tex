@@ -1,0 +1,323 @@
+% !TEX program = xelatex
+% ============================================================
+% 浙江大学软件学院智能计算与安全组 · 实践考核中期方案
+% 编译：
+%   xelatex midterm_plan.tex
+%   bibtex midterm_plan
+%   xelatex midterm_plan.tex
+%   xelatex midterm_plan.tex
+% ============================================================
+\documentclass[11pt]{article}
+
+\usepackage[preprint]{acl}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+
+\IfFontExistsTF{TeX Gyre Termes}
+  {\setmainfont{TeX Gyre Termes}}
+  {\setmainfont{Liberation Serif}}
+\setCJKmainfont{Noto Serif CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans Mono CJK SC}
+\setlength{\emergencystretch}{2em}
+
+\newcommand{\system}{\textsc{MiroMemSkill}}
+\newcommand{\baseline}{\textsc{MiroFlow}}
+
+\title{基于 MiroFlow 的金融智能体记忆与技能机制：\\中期设计与优化方案}
+
+\author{张乐桁 \\
+  浙江大学软件学院（实践考核） \\
+  \texttt{lehengzhang@126.com}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+MiroFlow 是面向深度研究任务的多工具智能体框架。本项目在 MiroFlow 上构建 \system，将外部金融工具、长期记忆与程序性技能统一接入智能体推理流程，并以 A 股相对沪深~300 的月度超额收益方向预测作为验证场景。本文给出 memory/skill 联动架构、Mem0 风格记忆生命周期、点时评测体系，以及两条后续优化路线：一是沿用 MiroFlow 原生 \texttt{sub\_agents} 接口扩展多智能体分工；二是借鉴 Hermes 自进化框架~\citep{hermes2025}，对技能文档与提示组件进行可审计的迭代优化。
+\end{abstract}
+
+\section{任务理解与阶段目标}
+
+MiroFlow~\citep{miroflow2025} 已具备主智能体编排、MCP 工具调用和长链推理能力。为使任务中的工具使用经验、证据组织方式与决策规律能够跨任务复用，本项目进一步建立可检索、可更新、可审计且受时间约束的长期认知层。
+
+按照任务要求，本阶段聚焦三个方向：
+\begin{enumerate}
+    \item 在不破坏原有工具生态的前提下，引入 memory 与 skill，使智能体能够在推理前、推理中和任务后形成闭环；
+    \item 将系统迁移到金融预测场景，设计点时安全的 A 股基准与分层评测体系；
+    \item 在 MiroFlow 接口之上规划多智能体分工与 Hermes 式自进化路径，形成可复现的演进机制。
+\end{enumerate}
+
+选择金融场景的原因在于：标签可由价格确定性生成，工具数据可以按决策日硬截断，同一智能体又会连续经历多个市场月份，天然适合观察“经验积累---复用---修正”的动态过程。
+
+\section{总体架构设计}
+
+\subsection{三路径联动}
+
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  >=Latex,
+  font=\small,
+  x=1cm,
+  y=1cm,
+  main/.style={
+    draw=black!65,
+    line width=0.6pt,
+    fill=black!3,
+    rounded corners=4pt,
+    align=center,
+    minimum height=1.15cm,
+    text width=3.05cm,
+    inner sep=4pt
+  },
+  pathbox/.style={
+    draw=black!50,
+    line width=0.5pt,
+    fill=white,
+    rounded corners=3pt,
+    align=center,
+    minimum height=1.25cm,
+    text width=3.05cm,
+    inner sep=3pt
+  },
+  store/.style={
+    draw=black!65,
+    line width=0.7pt,
+    fill=black!10,
+    rounded corners=5pt,
+    align=center,
+    minimum height=0.95cm,
+    text width=10.8cm,
+    inner sep=5pt
+  },
+  guard/.style={
+    draw=black!45,
+    line width=0.5pt,
+    fill=black!5,
+    rounded corners=3pt,
+    align=center,
+    minimum height=0.75cm,
+    text width=10.8cm,
+    font=\footnotesize,
+    inner sep=4pt
+  },
+  arr/.style={
+    -{Latex[length=2.2mm,width=1.8mm]},
+    line width=0.65pt,
+    draw=black!60
+  },
+  varr/.style={
+    -{Latex[length=2.2mm,width=1.8mm]},
+    line width=0.55pt,
+    draw=black!50
+  }
+]
+
+% ---- 三列主流程 + 左侧任务输入，列对齐 ----
+\node[main] (inject) at (3.55, 0) {%
+  \textbf{任务前被动注入}\\[-1pt]
+  {\footnotesize 记忆检索 · 技能匹配}};
+\node[main] (agent)  at (7.10, 0) {%
+  \textbf{主智能体}\\[-1pt]
+  {\footnotesize 金融工具推理}};
+\node[main] (judge)  at (10.65, 0) {%
+  \textbf{确定性判题}\\[-1pt]
+  {\footnotesize 预测 · 标签}};
+
+\node[main, left=1.15cm of inject, text width=2.4cm, minimum height=1.15cm] (task) {%
+  \textbf{A 股任务}\\[-1pt]
+  {\footnotesize 点时题面}};
+
+\draw[arr] (task.east) -- (inject.west);
+\draw[arr] (inject.east) -- (agent.west);
+\draw[arr] (agent.east) -- (judge.west);
+
+\node[pathbox] (p1) at (3.55, -2.05) {%
+  {\scriptsize\bfseries 路径① 被动注入}\\[-1pt]
+  {\scriptsize 读认知层 → orchestrator prompt}};
+\node[pathbox] (p2) at (7.10, -2.05) {%
+  {\scriptsize\bfseries 路径② 主动调用}\\[-1pt]
+  {\scriptsize memskill MCP 读写}};
+\node[pathbox] (p3) at (10.65, -2.05) {%
+  {\scriptsize\bfseries 路径③ 判题后闭环}\\[-1pt]
+  {\scriptsize 台账 · 反思 · 规则同步}};
+
+\draw[varr] (inject.south) -- (p1.north);
+\draw[varr] (agent.south) -- (p2.north);
+\draw[varr] (judge.south) -- (p3.north);
+
+% 三条路径垂直汇流（水平总线 + 单向下行，无交叉）
+\coordinate (t1) at (3.55, -2.95);
+\coordinate (t2) at (7.10, -2.95);
+\coordinate (t3) at (10.65, -2.95);
+
+\draw[varr] (p1.south) -- (t1);
+\draw[varr] (p2.south) -- (t2);
+\draw[varr] (p3.south) -- (t3);
+\draw[line width=0.55pt, draw=black!50] (t1) -- (t3);
+
+\node[store] (bank) at (7.10, -3.85) {%
+  \textbf{长期认知层：}向量记忆库 \;·\; 技能库 \;·\; 操作审计日志};
+
+\draw[varr] (t2) -- (bank.north);
+
+\node[guard] (guard) at (7.10, -4.85) {%
+  时间约束：\texttt{as\_of} 数据截断 \;\textbar\; 退出日 embargo \;\textbar\; 逐月执行屏障};
+
+\draw[varr] (guard.north) -- (bank.south);
+
+\end{tikzpicture}%
+}
+\caption{\system 的三条联动路径：①\,任务前被动注入；②\,推理期 MCP 主动调用；③\,判题后写入与规则同步。底层时间约束贯穿全部路径。}
+\label{fig:architecture}
+\end{figure*}
+
+系统在 MiroFlow 的 orchestrator 与工具管理层之间加入长期认知层，整体流程如图~\ref{fig:architecture}。
+
+\textbf{任务前被动注入。} 系统压缩题面中的股票、行业与决策日等任务特征，用向量相似度检索 Top-$k$ 历史经验，同时匹配技能描述与触发词。检索结果、技能预览和智能体自身的历史校准统计被拼接到首轮提示中。
+
+\textbf{推理期主动调用。} memskill MCP 服务暴露
+\texttt{memory\_search}、\texttt{memory\_save}、\texttt{skill\_list} 和
+\texttt{skill\_load}，使智能体在推理过程中按需检索或加载完整技能。
+
+\textbf{判题后闭环。} 基准程序在生成确定性标签后记录预测方向、正误、决策月份和标签可用日；再根据配置进入单任务、月度截面或扩展窗口反思。该设计借鉴 Reflexion 的语言反馈思想~\citep{shinn2023reflexion}，并将写入时机与金融标签成熟时间显式分离。
+
+\subsection{Mem0 风格记忆生命周期}
+
+记忆写入参考 Mem0~\citep{mem0}，分为两个阶段。\textbf{提取阶段}从任务轨迹与判题结果中蒸馏至多一条原子条件式经验，输出采用结构化 JSON 并经过双次解析校验。\textbf{整合阶段}将候选经验嵌入后与最相似的历史记录比较，由整合器选择
+\textsc{Add}、\textsc{Update}、\textsc{Delete} 或 \textsc{None}，每次操作写入独立历史日志。
+
+存储层采用 JSONL 持久化、GLM \texttt{embedding-3} 向量与余弦相似度检索，并通过文件锁支持并发访问。检索时根据“原预测方向 $\times$ 判题正误”计算经验的功能立场，并对 Top-$k$ 结果施加方向配额，避免检索块成为隐式方向投票。
+
+\subsection{技能与金融工具}
+
+技能以带 YAML frontmatter 的 \texttt{SKILL.md} 组织，包含名称、功能描述、触发词和执行步骤。路由器返回相关技能摘要，高置信匹配可预览正文，其余技能列在可用清单中供 \texttt{skill\_load} 按需加载。计划封装 A 股预测协议、相对动量、估值基本面、Qlib 与 Tushare 技能；Qlib 信号采用逐月 walk-forward，行情与财务数据来自 Tushare 本地缓存~\citep{qlib2020,tushare}。
+
+\subsection{点时安全约束}
+
+金融记忆的关键约束是“正确答案何时可知”：
+\begin{enumerate}
+    \item 行情、估值和财务工具均要求显式 \texttt{as\_of}，并在服务端过滤决策日之后的数据；
+    \item 每条结果记录 \texttt{available\_after}，持有期结束后才允许进入后续任务的检索或统计；
+    \item 任务按月份分组，同月截面并发完成后才更新跨月状态。
+\end{enumerate}
+
+\section{A 股验证场景与评测体系设计}
+
+\subsection{任务形式化}
+
+评测任务为\textbf{月度超额收益方向预测}：在每月首个交易日收盘后，基于 as-of 截断的数据工具，预测未来 20 个交易日相对沪深~300 的超额收益方向（跑赢/跑输），并以 \texttt{\textbackslash boxed\{...\}} 形式输出二值结论。标签由本地行情缓存确定性生成，不依赖任何模型。
+
+\subsection{分层基线与指标体系}
+
+评测体系拟包含四层对照：
+\begin{enumerate}
+    \item \textbf{无信息基线}：随机、全做多、简单规则（如 20 日动量）；
+    \item \textbf{统计/ML 基线}：Qlib walk-forward 信号；
+    \item \textbf{智能体基线}：仅金融工具的 MiroFlow 主智能体；
+    \item \textbf{实验臂}：逐步叠加 skill、memory、判题后更新的 \system 变体。
+\end{enumerate}
+指标涵盖方向命中率（Wilson 95\% 置信区间）、双向召回、预测方向分布、逐月稳定性、工具调用覆盖率，以及多头与多空组合收益。
+
+\subsection{记忆机制演进路线}
+
+记忆子系统沿“可用---可控---可验证”设计三代方案：
+\begin{itemize}
+    \item \textbf{v1（per-task）}：向量检索 + Mem0 四动作整合，每任务至多一条经验；
+    \item \textbf{v2（monthly）}：月度截面反思（$n=16$）+ 自校准注入 + 月间执行屏障；
+    \item \textbf{v3（rolling）}：扩展窗口统计规则 + 退出日封锁 + 时间留出验证与 FDR 门禁；LLM 只解释已通过门禁的规则，不参与规则发现。
+\end{itemize}
+各版本使用独立 namespace，保证记忆、台账与审计历史相互隔离。
+
+\section{多智能体扩展方案}
+
+多智能体改造\textbf{不另起编排框架}，而是直接沿用 MiroFlow 提供的原生接口，在 Hydra 配置中声明 \texttt{sub\_agents}，由 orchestrator 统一调度。
+
+\subsection{MiroFlow 接口要点}
+
+MiroFlow 的多智能体机制包含三层：
+\begin{enumerate}
+    \item \textbf{配置层}：在 agent YAML 的 \texttt{sub\_agents} 字段下为每个子智能体指定 \texttt{prompt\_class}、独立 \texttt{tool\_config} 与 \texttt{max\_turns}（参考 FinSearchComp 的 \texttt{agent-worker} 配置模式）；
+    \item \textbf{暴露层}：\texttt{expose\_sub\_agents\_as\_tools()} 将子智能体包装为主智能体可调用的工具定义，命名须以 \texttt{agent-} 为前缀；
+    \item \textbf{执行层}：主智能体通过工具调用触发 \texttt{run\_sub\_agent()}，子智能体在独立会话中完成子任务并返回摘要，轨迹写入 \texttt{sub\_agent\_message\_history\_sessions}。
+\end{enumerate}
+
+\subsection{A 股场景的分工设计}
+
+针对单股预测任务，拟设置三个专业化子智能体：
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lp{0.55\columnwidth}@{}}
+\toprule
+\textbf{子智能体} & \textbf{职责与工具} \\
+\midrule
+\texttt{agent-momentum} & 相对强弱、动量与截面排名（ashare 行情 + qlib\_signal） \\
+\texttt{agent-fundamental} & 估值分位、财务指标与公告日过滤（valuation + financials） \\
+\texttt{agent-synthesis} & 汇总子报告、对照记忆/技能、输出最终方向 \\
+\bottomrule
+\end{tabular}
+\caption{A 股多智能体分工方案。主智能体负责调度与最终决策，子智能体专注证据收集。}
+\label{tab:multiagent}
+\end{table}
+
+主智能体保留 memskill MCP 与记忆注入能力；子智能体仅挂载与其职责相关的 ashare 工具子集，减少上下文噪声。子智能体输出以结构化摘要返回主智能体，主智能体综合各通道证据后给出 \texttt{\textbackslash boxed\{...\}} 结论。该方案与现有单智能体 benchmark 兼容——关闭 \texttt{sub\_agents} 即可退化为当前配置。
+
+\section{自进化优化方案（Hermes 框架）}
+
+第三条优化路径借鉴 Hermes Agent Self-Evolution~\citep{hermes2025}，在 \system 之上建立\textbf{离线、可审计}的文本级优化循环，不修改模型权重。
+
+\subsection{优化目标与引擎}
+
+Hermes 框架将可优化对象分为四个层级，本项目优先聚焦前两层：
+\begin{enumerate}
+    \item \textbf{技能文档（Tier 1）}：\texttt{memory\_bank/skills\_ashare/*.md} 中的程序性指令——通过 batch\_runner 在 A 股任务集上评估“遵循该技能后判题是否正确”，用 DSPy + GEPA 反射式演化技能文本；
+    \item \textbf{工具描述（Tier 2）}：MCP 工具的 \texttt{description} 字段——优化主/子智能体在 ashare 工具族中的选择准确率；
+    \item \textbf{提示组件（Tier 3，后续）}：记忆注入块模板、校准块措辞等系统提示片段；
+    \item \textbf{代码实现（Tier 4，后续）}：Darwinian Evolver 演化工具脚本，以 pytest 为门禁。
+\end{enumerate}
+
+\subsection{与 MiroMemSkill 的对接}
+
+自进化循环与现有架构的对接点如下：
+\begin{itemize}
+    \item \textbf{评估集}：从 A 股 benchmark 日志与 \texttt{memory\_bank/*\_outcomes.jsonl} 台账中抽取带标签的任务轨迹，划分 train/validation/test；
+    \item \textbf{评估器}：复用 \texttt{common\_benchmark} 的判题逻辑与 \texttt{backtest.py} 的组合指标，作为 GEPA 的 fitness 函数；
+    \item \textbf{优化对象}：首轮以 \texttt{ashare\_prediction\_protocol.md}、\texttt{qlib\_skill/SKILL.md} 等高频技能为候选；
+    \item \textbf{部署}：通过 Git 版本管理演化后的技能/提示，独立 namespace 做 A/B 对照，支持 \texttt{git revert} 回滚。
+\end{itemize}
+
+\subsection{与记忆反思的分工}
+
+记忆反思（判题后写入经验）与 Hermes 自进化（离线优化技能/提示文本）形成互补：
+\begin{itemize}
+    \item 记忆反思负责\textbf{运行时}从单任务/月度截面中提炼条件式经验，写入向量库；
+    \item Hermes 自进化负责\textbf{离线}从批量轨迹中发现“哪些技能措辞/工具描述导致系统性误判”，并生成改进版本。
+\end{itemize}
+v3 的 rolling 统计规则属于第三条路径——用确定性统计替代 LLM 小样本归纳，与 Hermes 的 GEPA 文本优化并行推进，最终在统一协议下做消融对比。
+
+\section{后续工作计划}
+
+\begin{enumerate}
+    \item \textbf{单智能体闭环}：完成 memory/skill 三路径接入、A 股点时工具链与 v1--v3 记忆配置，跑通 benchmark 流水线；
+    \item \textbf{多智能体扩展}：按表~\ref{tab:multiagent} 在 MiroFlow \texttt{sub\_agents} 接口上配置三个子智能体，验证分工调度与证据汇总；
+    \item \textbf{Hermes 自进化}：以 A 股技能文档为首批优化目标，搭建 DSPy + GEPA 评估循环并与 benchmark 判题对接；
+    \item \textbf{统一消融}：在相同模型、任务顺序与点时屏障下，对比 Tools / +Skills / +Memory / Full / Multi-agent / Evolved-skills 各实验臂；
+    \item \textbf{最终报告}：汇总架构原理、理论逻辑、实验配置与对比/消融结果，形成完整研究报告。
+\end{enumerate}
+
+\section{总结}
+
+本中期方案在 MiroFlow 之上设计了 \system 的 memory/skill 联动架构、Mem0 风格记忆生命周期、A 股点时评测体系，并规划两条后续优化路线：多智能体分工沿用 MiroFlow 原生 \texttt{sub\_agents} 接口，自进化迭代借鉴 Hermes 框架对技能与提示进行离线演化。三条路径（单智能体记忆、多智能体分工、Hermes 自进化）将在统一 benchmark 下逐步落地与消融验证。
+
+\bibliography{custom}
+
+\end{document}

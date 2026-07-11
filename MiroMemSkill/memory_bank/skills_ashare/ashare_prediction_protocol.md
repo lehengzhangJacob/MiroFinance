@@ -12,9 +12,9 @@ triggers:
 ## 标准流程（每题必做）
 
 1. **工具调用清单**（as_of 一律用题目给定日期，格式 YYYYMMDD）：
-   - ashare_price_history(ts_code, as_of, 60) → 个股动量
-   - ashare_index_history(as_of, 60) → 指数动量
-   - ashare_valuation(ts_code, as_of) → 估值分位
+   - ashare_price_history(ts_code, as_of, lookback_days=250) → 个股动量（覆盖约 1 年交易日）
+   - ashare_index_history(as_of, lookback_days=250) → 指数动量
+   - ashare_valuation(ts_code, as_of, lookback_days=250) → 估值分位
    - ashare_financials(ts_code, as_of) → 最近已披露财报
    - ashare_ml_signal(ts_code, as_of) → qlib 逐月 walk-forward 机器学习信号（**必查**：给出该股在池内的截面排名，rank 越靠前越可能跑赢）
 2. **证据打分**：把每条证据标注为 [+看多超额] / [-看空超额] / [0中性]，明确主要矛盾；证据冲突时优先近端动量与量价，其次 ML 截面排名与估值分位。

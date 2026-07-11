@@ -116,6 +116,17 @@ class GPTOpenAIClient(LLMProviderClientBase):
                     "stream": False,
                 }
 
+            thinking_mode = str(self.cfg.llm.get("thinking_mode", "")).strip().lower()
+            if thinking_mode:
+                if thinking_mode not in {"enabled", "disabled"}:
+                    raise ValueError(
+                        "llm.thinking_mode must be 'enabled' or 'disabled', "
+                        f"got {thinking_mode!r}"
+                    )
+                # Kimi K2.6 exposes `thinking` as an API extension.  OpenAI's
+                # SDK forwards provider-specific fields through extra_body.
+                params["extra_body"] = {"thinking": {"type": thinking_mode}}
+
             if self.top_p != 1.0:
                 params["top_p"] = self.top_p
             # NOTE: min_p and top_k are not supported by OpenAI chat completion API, but SGLANG and VLLM support them
