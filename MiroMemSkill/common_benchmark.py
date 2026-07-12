@@ -4,9 +4,11 @@
 
 import asyncio
 import json
+import math
 import os
 import signal
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -26,10 +28,19 @@ from src.memory.monthly_reflection import (
     compute_month_feature_rows,
     compute_month_features,
 )
+from src.utils.ashare_anchor import (
+    AnchorPolicy,
+    assemble_core_satellite_allocation,
+    build_anchor_snapshot,
+    render_anchor_policy_prompt,
+)
+from src.utils.ashare_satellite import load_excess_signal_candidates
 from src.utils.ashare_trader import (
     cash_allocation,
+    evaluate_anchor_deviation,
     evaluate_portfolio_month,
     parse_portfolio_weights,
+    validate_portfolio_answer,
 )
 from src.utils.ashare_trader_features import compute_trader_feature_rows
 from src.logging.logger import (
@@ -46,6 +57,719 @@ from src.core.pipeline import (
 init_logging_for_benchmark_evaluation(print_task_logs=False)
 
 _REPO_ROOT = Path(__file__).resolve().parent
+
+
+_SATELLITE_DECISION_FACTOR_FIELDS = (
+    "rel5",
+    "rel20",
+    "rel60",
+    "vol20_ann",
+    "max_dd120",
+    "ma20_gap",
+    "amount20_vs120",
+    "pe_pct250",
+    "pb_pct250",
+    "financial_ann_date",
+    "or_yoy",
+    "netprofit_yoy",
+    "ml_rank",
+)
+
+
+def _pit_panel_value(value: Any) -> Any:
+    """Normalize missing PIT factor values for metadata and prompt rendering."""
+    if value is None or value == "":
+        return "NA"
+    if isinstance(value, float) and not math.isfinite(value):
+        return "NA"
+    return value
+
+
+def _enrich_satellite_candidate_rows(
+    rows: list[dict[str, Any]],
+    feature_rows: list[dict[str, Any]],
+    *,
+    decision_as_of: str,
+) -> list[dict[str, Any]]:
+    """Join the bounded PIT decision panel without changing signal order."""
+    factors_by_code = {
+        str(row.get("ts_code", "")).strip().upper(): row for row in feature_rows
+    }
+    enriched_rows: list[dict[str, Any]] = []
+    for source_row in rows:
+        row = dict(source_row)
+        code = str(row.get("ts_code", "")).strip().upper()
+        factors = factors_by_code.get(code, {})
+        row["decision_as_of"] = decision_as_of
+        for field_name in _SATELLITE_DECISION_FACTOR_FIELDS:
+            row[field_name] = _pit_panel_value(factors.get(field_name))
+        enriched_rows.append(row)
+    return enriched_rows
+
+
+def _render_satellite_candidate_block(
+    rows: list[dict[str, Any]],
+    *,
+    required_count: int,
+) -> str:
+    """Render the bounded PIT candidate set injected into the Agent prompt."""
+    if not rows:
+        raise ValueError("core-satellite candidate block cannot be empty")
+    if required_count <= 0 or required_count > len(rows):
+        raise ValueError("core-satellite required_count must fit candidate rows")
+    signal_date = str(rows[0]["signal_date"])
+    target = str(rows[0]["target"])
+    lines = [
+        "## 超额收益卫星候选（系统点时注入）",
+        (
+            f"- signal_date={signal_date}（不晚于决策日）；target={target}；"
+            "已排除 rel20 top4。"
+        ),
+        (
+            f"- 必须只选 {required_count} 只卫星代码（不多不少），且只能从以下候选中选择；"
+            "固定权重与无效输出回退由系统处理。"
+        ),
+        (
+            "- 比较超额模型 score/rank 与严格点时的趋势、风险、估值、基本面证据，"
+            "并结合提示中已到期的结构化记忆（若有），不得机械照抄排名；"
+            "若无可信反向证据，仍可选择模型排名最前者。"
+        ),
+        (
+            "- 数值口径：rel/vol/max_dd/ma/or_yoy/netprofit_yoy 为%；"
+            "估值分位为 0-100；amount20_vs120 为成交额均值比；"
+            "ml_rank 为全池绝对 Qlib 排名。"
+        ),
+    ]
+    for position, row in enumerate(rows, start=1):
+        lines.append(
+            f"- {position}. {row['ts_code']} "
+            f"(score={float(row['score']):.8g}, signal_rank={int(row['rank'])}, "
+            f"signal_date={row['signal_date']}, train_end={row['train_end']}, "
+            f"target={row['target']})"
+        )
+        lines.append(
+            "  - PIT "
+            f"decision_as_of={_pit_panel_value(row.get('decision_as_of'))}; "
+            f"trend: rel5={_pit_panel_value(row.get('rel5'))}, "
+            f"rel20={_pit_panel_value(row.get('rel20'))}, "
+            f"rel60={_pit_panel_value(row.get('rel60'))}, "
+            f"ma20_gap={_pit_panel_value(row.get('ma20_gap'))}; "
+            f"risk: vol20_ann={_pit_panel_value(row.get('vol20_ann'))}, "
+            f"max_dd120={_pit_panel_value(row.get('max_dd120'))}; "
+            "liquidity: "
+            f"amount20_vs120={_pit_panel_value(row.get('amount20_vs120'))}; "
+            f"valuation: pe_pct250={_pit_panel_value(row.get('pe_pct250'))}, "
+            f"pb_pct250={_pit_panel_value(row.get('pb_pct250'))}; "
+            "fundamental: "
+            "financial_ann_date="
+            f"{_pit_panel_value(row.get('financial_ann_date'))}, "
+            f"or_yoy={_pit_panel_value(row.get('or_yoy'))}, "
+            f"netprofit_yoy={_pit_panel_value(row.get('netprofit_yoy'))}; "
+            f"absolute_qlib: ml_rank={_pit_panel_value(row.get('ml_rank'))}"
+        )
+    return "\n".join(lines)
+
+
+_SATELLITE_CANDIDATE_KEYS = (
+    "ranked_prediction_candidates",
+    "prediction_candidates",
+    "eligible_prediction_candidates",
+    "expected_satellite_candidates",
+    "expected_candidates",
+    "satellite_candidates",
+    "prediction_candidate_details",
+)
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _stock_code(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _code_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_codes: Sequence[Any] = [value]
+    elif isinstance(value, Mapping):
+        raw_codes = list(value)
+    elif isinstance(value, Sequence):
+        raw_codes = value
+    else:
+        return []
+    return list(
+        dict.fromkeys(code for item in raw_codes if (code := _stock_code(item)))
+    )
+
+
+def _candidate_code(row: Mapping[str, Any]) -> str:
+    for key in ("ts_code", "code", "symbol"):
+        code = _stock_code(row.get(key))
+        if code:
+            return code
+    return ""
+
+
+def _candidate_rows(value: Any) -> list[dict[str, Any]]:
+    """Retain only structured, point-in-time candidate rank/score inputs."""
+    if isinstance(value, Mapping):
+        if _candidate_code(value):
+            raw_items: list[Any] = [value]
+        else:
+            raw_items = []
+            for code, item in value.items():
+                if isinstance(item, Mapping):
+                    row = dict(item)
+                    row.setdefault("ts_code", code)
+                else:
+                    row = {"ts_code": code, "score": item}
+                raw_items.append(row)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        raw_items = list(value)
+    elif isinstance(value, str):
+        raw_items = [value]
+    else:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for item in raw_items:
+        if isinstance(item, str):
+            rows.append({"ts_code": item})
+        elif isinstance(item, Mapping):
+            rows.append(dict(item))
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+            parts = list(item)
+            if parts:
+                row = {"ts_code": parts[0]}
+                if len(parts) > 1:
+                    row["score"] = parts[1]
+                rows.append(row)
+    return rows
+
+
+def _candidate_detail_lookup(
+    snapshot: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Collect factual model rank/score fields without retaining other text."""
+    sources: list[Any] = []
+    selection = metadata.get("satellite_selection")
+    if isinstance(selection, Mapping):
+        for key in ("candidates", "candidate_details", "ranked_candidates"):
+            if key in selection:
+                sources.append(selection.get(key))
+    for container in (metadata, snapshot):
+        for key in _SATELLITE_CANDIDATE_KEYS:
+            if key in container:
+                sources.append(container.get(key))
+
+    details: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        for row in _candidate_rows(source):
+            code = _candidate_code(row)
+            if not code:
+                continue
+            detail = details.setdefault(code, {})
+            if "model_rank" not in detail:
+                for key in (
+                    "model_rank",
+                    "rank",
+                    "candidate_rank",
+                    "eligible_rank",
+                    "prediction_rank",
+                    "ml_rank",
+                ):
+                    rank = _finite_float(row.get(key))
+                    if rank is not None and rank > 0:
+                        detail["model_rank"] = (
+                            int(rank) if rank.is_integer() else rank
+                        )
+                        break
+            if "model_score" not in detail:
+                for key in (
+                    "model_score",
+                    "score",
+                    "prediction_score",
+                    "predicted_excess_return",
+                    "ml_score",
+                ):
+                    score = _finite_float(row.get(key))
+                    if score is not None:
+                        detail["model_score"] = score
+                        break
+    if isinstance(selection, Mapping):
+        for keys, field in (
+            (("candidate_ranks", "ranks", "model_ranks"), "model_rank"),
+            (("candidate_scores", "scores", "model_scores"), "model_score"),
+        ):
+            for key in keys:
+                values = selection.get(key)
+                if not isinstance(values, Mapping):
+                    continue
+                for raw_code, raw_value in values.items():
+                    code = _stock_code(raw_code)
+                    number = _finite_float(raw_value)
+                    if not code or number is None or (
+                        field == "model_rank" and number <= 0
+                    ):
+                        continue
+                    details.setdefault(code, {}).setdefault(
+                        field,
+                        int(number)
+                        if field == "model_rank" and number.is_integer()
+                        else number,
+                    )
+    return details
+
+
+def _candidate_payload(
+    snapshot: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> Any | None:
+    """Return the first non-empty PIT candidate payload, snapshot first."""
+    for container in (snapshot, metadata):
+        for key in _SATELLITE_CANDIDATE_KEYS:
+            raw = container.get(key)
+            if isinstance(raw, Mapping) and raw:
+                return raw
+            if (
+                isinstance(raw, Sequence)
+                and not isinstance(raw, (str, bytes))
+                and len(raw) > 0
+            ):
+                return raw
+    selection = metadata.get("satellite_selection")
+    if isinstance(selection, Mapping):
+        for key in ("candidates", "candidate_details", "ranked_candidates"):
+            raw = selection.get(key)
+            if isinstance(raw, Mapping) and raw:
+                return raw
+            if (
+                isinstance(raw, Sequence)
+                and not isinstance(raw, (str, bytes))
+                and len(raw) > 0
+            ):
+                return raw
+    return None
+
+
+def _normalized_fallback_flag(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized in {
+            "1",
+            "true",
+            "yes",
+            "used",
+            "fallback",
+            "deterministic",
+            "deterministic_fallback",
+            "model_top",
+        }:
+            return True
+        if normalized in {
+            "0",
+            "false",
+            "no",
+            "unused",
+            "none",
+            "explicit",
+            "model_selected",
+        }:
+            return False
+    if isinstance(value, Mapping):
+        for key in (
+            "used",
+            "fallback_used",
+            "selection_fallback",
+            "used_fallback",
+        ):
+            if key in value:
+                return _normalized_fallback_flag(value.get(key))
+    return None
+
+
+def _selection_fallback(metadata: Mapping[str, Any]) -> bool | None:
+    for key in (
+        "selection_fallback",
+        "satellite_selection_fallback",
+        "satellite_fallback",
+    ):
+        if key in metadata:
+            flag = _normalized_fallback_flag(metadata.get(key))
+            if flag is not None:
+                return flag
+    selection = metadata.get("satellite_selection")
+    if isinstance(selection, Mapping):
+        return _normalized_fallback_flag(selection)
+    return None
+
+
+def _build_core_satellite_attribution(
+    *,
+    metadata: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    actual_weights: Mapping[str, float],
+    actual_cash: float,
+    actual_result: Any,
+    stock_returns: Mapping[str, float],
+    excess_returns: Mapping[str, float],
+    index_return: float,
+    starting_capital: float,
+    open_cost: float,
+    close_cost: float,
+    min_cost: float,
+    anchor_attribution: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Build a factual, liquidation-gated satellite audit or fail closed."""
+    selection = metadata.get("satellite_selection")
+    selection_mapping = selection if isinstance(selection, Mapping) else {}
+    candidate_payload = _candidate_payload(snapshot, metadata)
+    if candidate_payload is None:
+        return None
+
+    attribution_snapshot = dict(snapshot)
+    for key in _SATELLITE_CANDIDATE_KEYS:
+        attribution_snapshot.pop(key, None)
+    attribution_snapshot["ranked_prediction_candidates"] = candidate_payload
+
+    try:
+        deterministic = assemble_core_satellite_allocation(attribution_snapshot)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    top4 = [_stock_code(code) for code in deterministic.get("top4", [])]
+    if len(top4) != 4 or len(set(top4)) != 4 or not all(top4):
+        return None
+    top4_set = set(top4)
+    eligible = [
+        _stock_code(code)
+        for code in deterministic.get("eligible_prediction_candidates", [])
+        if _stock_code(code)
+    ]
+    if not eligible or len(set(eligible)) != len(eligible):
+        return None
+    eligible_rank = {code: rank for rank, code in enumerate(eligible)}
+
+    actual_satellites = sorted(
+        (
+            _stock_code(code)
+            for code, weight in actual_weights.items()
+            if _stock_code(code) not in top4_set and float(weight) > 1e-8
+        ),
+        key=lambda code: (eligible_rank.get(code, len(eligible_rank)), code),
+    )
+    declared_actual = _code_list(selection_mapping.get("selected_codes"))
+    if declared_actual and set(declared_actual) != set(actual_satellites):
+        return None
+    try:
+        actual_fixed = assemble_core_satellite_allocation(
+            attribution_snapshot,
+            selected_satellites=actual_satellites,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    # Attribution applies only to the canonical system-fixed portfolio.
+    expected_actual_weights = actual_fixed.get("weights", {})
+    if not isinstance(expected_actual_weights, Mapping):
+        return None
+    if any(
+        abs(float(actual_weights.get(code, 0.0)) - float(weight)) > 1e-6
+        for code, weight in expected_actual_weights.items()
+    ):
+        return None
+    if abs(float(actual_cash) - float(actual_fixed.get("cash", -1.0))) > 1e-6:
+        return None
+    expected_codes = {
+        _stock_code(code) for code in expected_actual_weights if _stock_code(code)
+    }
+    if any(
+        _stock_code(code) not in expected_codes and float(weight) > 1e-8
+        for code, weight in actual_weights.items()
+    ):
+        return None
+
+    deterministic_weights = deterministic.get("weights", {})
+    if not isinstance(deterministic_weights, Mapping):
+        return None
+    deterministic_satellites = [
+        _stock_code(code) for code in deterministic.get("satellite_codes", [])
+    ]
+    if not deterministic_satellites or not all(deterministic_satellites):
+        return None
+    declared_deterministic = _code_list(
+        selection_mapping.get("deterministic_codes")
+    )
+    if declared_deterministic and set(declared_deterministic) != set(
+        deterministic_satellites
+    ):
+        return None
+    selection_differs = set(actual_satellites) != set(deterministic_satellites)
+    if selection_differs:
+        try:
+            deterministic_result = evaluate_portfolio_month(
+                deterministic_weights,
+                float(deterministic["cash"]),
+                stock_returns,
+                index_return,
+                starting_capital=starting_capital,
+                excess_returns=excess_returns,
+                open_cost=open_cost,
+                close_cost=close_cost,
+                min_cost=min_cost,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+    else:
+        # The deterministic portfolio is byte-for-byte equivalent in economic
+        # terms, so the already evaluated actual result is the exact baseline.
+        deterministic_result = actual_result
+
+    detail_lookup = _candidate_detail_lookup(snapshot, metadata)
+    candidate_facts: list[dict[str, Any]] = []
+    relevant_codes = set(actual_satellites) | set(deterministic_satellites)
+    for candidate_order, code in enumerate(eligible, 1):
+        if code not in relevant_codes:
+            continue
+        realized_return = _finite_float(stock_returns.get(code))
+        realized_excess = _finite_float(excess_returns.get(code))
+        if realized_return is None:
+            return None
+        if realized_excess is None:
+            realized_excess = realized_return - float(index_return)
+        actual_weight = float(actual_weights.get(code, 0.0))
+        deterministic_weight = float(deterministic_weights.get(code, 0.0))
+        actual_net_contribution = _finite_float(
+            actual_result.contributions.get(code, 0.0)
+        )
+        deterministic_net_contribution = _finite_float(
+            deterministic_result.contributions.get(code, 0.0)
+        )
+        if (
+            actual_net_contribution is None
+            or deterministic_net_contribution is None
+        ):
+            return None
+        row: dict[str, Any] = {
+            "code": code,
+            "candidate_rank": candidate_order,
+            "realized_stock_return": realized_return,
+            "realized_excess_vs_csi300": realized_excess,
+            "selected": code in actual_satellites,
+            "deterministic_selected": code in deterministic_satellites,
+            "actual_weight": actual_weight,
+            "deterministic_weight": deterministic_weight,
+            "weighted_return_contribution": actual_weight * realized_return,
+            "weighted_excess_contribution": (
+                actual_weight * realized_excess
+            ),
+            "net_contribution": actual_net_contribution,
+            "deterministic_weighted_return_contribution": (
+                deterministic_weight * realized_return
+            ),
+            "deterministic_weighted_excess_contribution": (
+                deterministic_weight * realized_excess
+            ),
+            "deterministic_net_contribution": deterministic_net_contribution,
+        }
+        row.update(detail_lookup.get(code, {}))
+        candidate_facts.append(row)
+    if {row["code"] for row in candidate_facts} != relevant_codes:
+        return None
+
+    sleeve = deterministic.get("sleeve", {})
+    if not isinstance(sleeve, Mapping):
+        return None
+    regime = str(deterministic.get("regime", "")).strip().lower()
+    core_weight = _finite_float(deterministic.get("core_total_weight"))
+    satellite_weight = sum(
+        float(actual_weights.get(code, 0.0)) for code in actual_satellites
+    )
+    deterministic_satellite_weight = sum(
+        float(deterministic_weights.get(code, 0.0))
+        for code in deterministic_satellites
+    )
+    cash_weight = _finite_float(actual_cash)
+    if (
+        regime not in {"risk_on", "neutral", "defensive"}
+        or core_weight is None
+        or cash_weight is None
+        or satellite_weight <= 0.0
+        or deterministic_satellite_weight <= 0.0
+    ):
+        return None
+
+    satellite_weighted_return = sum(
+        row["weighted_return_contribution"] for row in candidate_facts
+    )
+    satellite_weighted_excess = sum(
+        row["weighted_excess_contribution"] for row in candidate_facts
+    )
+    satellite_net_contribution = sum(
+        row["net_contribution"] for row in candidate_facts
+    )
+    deterministic_weighted_return = sum(
+        row["deterministic_weighted_return_contribution"]
+        for row in candidate_facts
+    )
+    deterministic_weighted_excess = sum(
+        row["deterministic_weighted_excess_contribution"]
+        for row in candidate_facts
+    )
+    deterministic_net_contribution = sum(
+        row["deterministic_net_contribution"] for row in candidate_facts
+    )
+    core_weighted_return_contribution = sum(
+        float(actual_weights.get(code, 0.0)) * float(stock_returns[code])
+        for code in top4
+    )
+    core_net_contribution = sum(
+        float(actual_result.contributions.get(code, 0.0)) for code in top4
+    )
+
+    pure_momentum_net_return = _finite_float(
+        (anchor_attribution or {}).get("anchor_net_return")
+    )
+    if pure_momentum_net_return is None:
+        raw_anchor_weights = snapshot.get("anchor_weights")
+        if isinstance(raw_anchor_weights, Mapping):
+            pure_weights = {
+                code: float(raw_anchor_weights.get(code, 0.0)) for code in top4
+            }
+            pure_cash = float(snapshot.get("anchor_cash", 0.0))
+        else:
+            pure_weights = {code: 1.0 / len(top4) for code in top4}
+            pure_cash = 0.0
+        try:
+            pure_result = evaluate_portfolio_month(
+                pure_weights,
+                pure_cash,
+                stock_returns,
+                index_return,
+                starting_capital=starting_capital,
+                excess_returns=excess_returns,
+                open_cost=open_cost,
+                close_cost=close_cost,
+                min_cost=min_cost,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        pure_momentum_net_return = float(pure_result.net_return)
+    actual_minus_momentum = (
+        float(actual_result.net_return) - pure_momentum_net_return
+    )
+
+    selection_source = (
+        str(selection_mapping.get("source", "") or "").strip().lower()
+    )
+    if selection_source not in {"agent", "deterministic_fallback"}:
+        selection_source = "unknown"
+    selection_fallback = _selection_fallback(metadata)
+    if selection_fallback is None and selection_source != "unknown":
+        selection_fallback = selection_source == "deterministic_fallback"
+    if selection_source == "unknown":
+        if selection_fallback is True:
+            selection_source = "deterministic_fallback"
+        elif selection_fallback is False and selection_mapping:
+            selection_source = "agent"
+
+    candidate_signal_date = str(
+        selection_mapping.get("candidate_signal_date", "") or ""
+    ).strip()[:32]
+    raw_target = selection_mapping.get("target")
+    target = (
+        str(raw_target).strip()[:120]
+        if isinstance(raw_target, (str, int, float, bool))
+        else ""
+    )
+
+    actual_minus_deterministic = (
+        float(actual_result.net_return) - deterministic_result.net_return
+    )
+    numeric_facts = (
+        satellite_weighted_return,
+        satellite_weighted_excess,
+        satellite_net_contribution,
+        deterministic_weighted_return,
+        deterministic_weighted_excess,
+        deterministic_net_contribution,
+        core_weighted_return_contribution,
+        core_net_contribution,
+        actual_minus_momentum,
+        actual_minus_deterministic,
+    )
+    if not all(math.isfinite(value) for value in numeric_facts):
+        return None
+
+    attribution: dict[str, Any] = {
+        "policy_mode": "core_satellite",
+        "regime": regime,
+        "top4_codes": top4,
+        "selected_codes": actual_satellites,
+        "deterministic_codes": deterministic_satellites,
+        "selection_differs": selection_differs,
+        "selection_fallback": selection_fallback,
+        "selection_source": selection_source,
+        "candidate_signal_date": candidate_signal_date,
+        "target": target,
+        "core_weight": core_weight,
+        "satellite_weight": satellite_weight,
+        "cash_weight": cash_weight,
+        "candidate_facts": candidate_facts,
+        "satellite_gross_return": satellite_weighted_return / satellite_weight,
+        "satellite_excess_return": satellite_weighted_excess / satellite_weight,
+        "satellite_net_return": satellite_net_contribution / satellite_weight,
+        "satellite_weighted_return_contribution": satellite_weighted_return,
+        "satellite_weighted_excess_contribution": satellite_weighted_excess,
+        "satellite_net_contribution": satellite_net_contribution,
+        "core_weighted_return_contribution": core_weighted_return_contribution,
+        "core_net_contribution": core_net_contribution,
+        "deterministic_satellite_gross_return": (
+            deterministic_weighted_return / deterministic_satellite_weight
+        ),
+        "deterministic_satellite_excess_return": (
+            deterministic_weighted_excess / deterministic_satellite_weight
+        ),
+        "deterministic_satellite_net_return": (
+            deterministic_net_contribution / deterministic_satellite_weight
+        ),
+        "deterministic_satellite_weighted_return_contribution": (
+            deterministic_weighted_return
+        ),
+        "deterministic_satellite_weighted_excess_contribution": (
+            deterministic_weighted_excess
+        ),
+        "deterministic_satellite_net_contribution": (
+            deterministic_net_contribution
+        ),
+        "actual_net_return": float(actual_result.net_return),
+        "deterministic_counterfactual_net_return": float(
+            deterministic_result.net_return
+        ),
+        "deterministic_counterfactual_total_cost": float(
+            deterministic_result.total_cost
+        ),
+        "actual_minus_deterministic_net_return": actual_minus_deterministic,
+        "actual_minus_deterministic_pnl": float(
+            actual_result.ending_capital - deterministic_result.ending_capital
+        ),
+        "pure_momentum_net_return": pure_momentum_net_return,
+        "actual_minus_pure_momentum_net_return": actual_minus_momentum,
+        "actual_minus_pure_momentum_pnl": float(
+            actual_minus_momentum * starting_capital
+        ),
+    }
+    return attribution
 
 
 class TaskStatus(StrEnum):
@@ -172,6 +896,128 @@ class BenchmarkEvaluator(ABC):
     def get_log_dir(self) -> Path:
         """Get the log directory for the current benchmark and model."""
         return Path(self.cfg.output_dir)
+
+    def _attach_trader_anchor_policy(self, task: BenchmarkTask) -> None:
+        """Attach one PIT-safe policy snapshot before prompt construction."""
+        metadata = task.metadata or {}
+        if metadata.get("task_type") != "portfolio_allocation":
+            return
+        configured = self.cfg.benchmark.get("anchor_policy", {})
+        raw_policy = OmegaConf.to_container(configured, resolve=True)
+        policy_values = raw_policy if isinstance(raw_policy, dict) else {}
+        policy = AnchorPolicy.from_mapping(policy_values)
+        policy_metadata = policy.to_dict()
+        if policy.mode == "core_satellite":
+            raw_candidate_limit = policy_values.get("candidate_limit", 6)
+            if isinstance(raw_candidate_limit, bool):
+                raise ValueError("core-satellite candidate_limit must be an integer")
+            try:
+                candidate_limit = int(raw_candidate_limit)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "core-satellite candidate_limit must be an integer"
+                ) from exc
+            if candidate_limit <= 0:
+                raise ValueError(
+                    "core-satellite candidate_limit must be greater than zero"
+                )
+            policy_metadata["candidate_limit"] = candidate_limit
+        metadata["anchor_policy"] = policy_metadata
+        task.metadata = metadata
+        if not policy.enabled:
+            metadata.pop("anchor_snapshot", None)
+            return
+
+        configured_data_dir = Path(str(self.cfg.get("data_dir", "data")))
+        if not configured_data_dir.is_absolute():
+            configured_data_dir = _REPO_ROOT / configured_data_dir
+        ashare_data_dir = configured_data_dir / "ashare"
+        as_of = str(metadata.get("entry_date") or metadata.get("as_of") or "")
+        stock_info = metadata.get("stock_info", {})
+        snapshot = build_anchor_snapshot(
+            as_of,
+            stock_info,
+            data_dir=ashare_data_dir,
+            policy=policy,
+        )
+        candidate_rows: list[dict[str, Any]] = []
+        if policy.mode == "core_satellite":
+            pool = {
+                str(code).strip().upper()
+                for code in metadata.get("stock_pool", [])
+            }
+            loaded_rows = load_excess_signal_candidates(
+                as_of,
+                snapshot.get("top4", []),
+                data_dir=ashare_data_dir,
+            )
+            candidate_rows = [
+                dict(row)
+                for row in loaded_rows
+                if str(row.get("ts_code", "")).strip().upper() in pool
+            ][:candidate_limit]
+            feature_rows = compute_trader_feature_rows(
+                as_of,
+                stock_info,
+                data_dir=ashare_data_dir,
+                lookback_days=250,
+            )
+            candidate_rows = _enrich_satellite_candidate_rows(
+                candidate_rows,
+                feature_rows,
+                decision_as_of=str(snapshot.get("as_of", as_of)),
+            )
+            snapshot = build_anchor_snapshot(
+                as_of,
+                stock_info,
+                data_dir=ashare_data_dir,
+                policy=policy,
+                prediction_candidates=candidate_rows,
+            )
+            # This validates the regime-specific candidate count and fails
+            # closed before any Agent call when the sleeve cannot be formed.
+            allocation = assemble_core_satellite_allocation(snapshot)
+            required_count = int(allocation["satellite_count"])
+            signal_dates = {
+                str(row.get("signal_date", "")).strip() for row in candidate_rows
+            }
+            targets = {str(row.get("target", "")).strip() for row in candidate_rows}
+            if len(signal_dates) != 1 or "" in signal_dates:
+                raise ValueError(
+                    "core-satellite candidates require one non-empty signal_date"
+                )
+            if len(targets) != 1 or "" in targets:
+                raise ValueError(
+                    "core-satellite candidates require one non-empty target"
+                )
+            metadata["satellite_candidates"] = candidate_rows
+            metadata["satellite_signal_date"] = next(iter(signal_dates))
+            metadata["satellite_target"] = next(iter(targets))
+            metadata["satellite_candidate_limit"] = candidate_limit
+            metadata["satellite_required_count"] = required_count
+        metadata["anchor_snapshot"] = snapshot
+        marker = "## 动量硬锚（系统将确定性复核）"
+        if marker not in task.task_question:
+            task.task_question = (
+                task.task_question.rstrip()
+                + "\n"
+                + render_anchor_policy_prompt(policy)
+                + "\n"
+            )
+        candidate_marker = "## 超额收益卫星候选（系统点时注入）"
+        if (
+            policy.mode == "core_satellite"
+            and candidate_marker not in task.task_question
+        ):
+            task.task_question = (
+                task.task_question.rstrip()
+                + "\n\n"
+                + _render_satellite_candidate_block(
+                    candidate_rows,
+                    required_count=int(metadata["satellite_required_count"]),
+                )
+                + "\n"
+            )
 
     async def run_single_task(self, task: BenchmarkTask) -> BenchmarkResult:
         """
@@ -379,6 +1225,21 @@ class BenchmarkEvaluator(ABC):
         with open(latest_log) as f:
             log_data = json.loads(f.read())
             if log_data.get("final_boxed_answer"):
+                if self.benchmark_name == "ashare-trader":
+                    validation = validate_portfolio_answer(
+                        log_data["final_boxed_answer"],
+                        task.metadata,
+                    )
+                    if not validation.ok:
+                        attempt_result["error_message"] = (
+                            "cached trader allocation rejected: "
+                            f"{validation.error}"
+                        )
+                        print(
+                            "    Rejecting invalid cached trader result: "
+                            f"{validation.error}"
+                        )
+                        return attempt_result
                 attempt_result["status"] = TaskStatus.RUN_COMPLETED
                 attempt_result["model_boxed_answer"] = log_data["final_boxed_answer"]
                 attempt_result["model_response"] = log_data.get("output", "")
@@ -935,17 +1796,89 @@ class BenchmarkEvaluator(ABC):
         episode_notional = float(
             self.cfg.memory.get("trader_episode_notional", 1_000_000.0)
         )
+        index_return = float(metadata.get("index_return", 0.0))
+        open_cost = float(metadata.get("open_cost", 0.0005))
+        close_cost = float(metadata.get("close_cost", 0.0015))
+        min_cost = float(metadata.get("min_cost", 5.0))
         portfolio_result = evaluate_portfolio_month(
             allocation.weights,
             allocation.cash,
             stock_returns,
-            float(metadata.get("index_return", 0.0)),
+            index_return,
             starting_capital=episode_notional,
             excess_returns=excess_returns,
-            open_cost=float(metadata.get("open_cost", 0.0005)),
-            close_cost=float(metadata.get("close_cost", 0.0015)),
-            min_cost=float(metadata.get("min_cost", 5.0)),
+            open_cost=open_cost,
+            close_cost=close_cost,
+            min_cost=min_cost,
         )
+
+        configured_data_dir = Path(str(self.cfg.get("data_dir", "data")))
+        if not configured_data_dir.is_absolute():
+            configured_data_dir = _REPO_ROOT / configured_data_dir
+        ashare_data_dir = configured_data_dir / "ashare"
+        policy: AnchorPolicy | None = None
+        snapshot: Mapping[str, Any] | None = None
+        anchor_attribution: dict[str, Any] | None = None
+        try:
+            policy = AnchorPolicy.from_mapping(metadata.get("anchor_policy"))
+            raw_snapshot = metadata.get("anchor_snapshot")
+            if raw_snapshot:
+                if not isinstance(raw_snapshot, Mapping):
+                    raise TypeError("anchor_snapshot must be a mapping")
+                snapshot = raw_snapshot
+            else:
+                snapshot = build_anchor_snapshot(
+                    entry_date,
+                    stock_info,
+                    data_dir=ashare_data_dir,
+                    policy=policy,
+                )
+            anchor_attribution = evaluate_anchor_deviation(
+                allocation.weights,
+                allocation.cash,
+                snapshot["anchor_weights"],
+                float(snapshot.get("anchor_cash", 0.0)),
+                stock_returns,
+                index_return,
+                starting_capital=episode_notional,
+                excess_returns=excess_returns,
+                open_cost=open_cost,
+                close_cost=close_cost,
+                min_cost=min_cost,
+                actual_result=portfolio_result,
+            )
+            anchor_attribution["market_regime"] = str(
+                snapshot.get("market_breadth", {}).get("regime", "")
+            )
+        except Exception as exc:
+            print(f"    [trader {month}] anchor attribution failed: {exc}")
+
+        satellite_attribution: dict[str, Any] | None = None
+        if (
+            policy is not None
+            and policy.mode == "core_satellite"
+            and snapshot is not None
+        ):
+            satellite_attribution = _build_core_satellite_attribution(
+                metadata=metadata,
+                snapshot=snapshot,
+                actual_weights=allocation.weights,
+                actual_cash=allocation.cash,
+                actual_result=portfolio_result,
+                stock_returns=stock_returns,
+                excess_returns=excess_returns,
+                index_return=index_return,
+                starting_capital=episode_notional,
+                open_cost=open_cost,
+                close_cost=close_cost,
+                min_cost=min_cost,
+                anchor_attribution=anchor_attribution,
+            )
+            if satellite_attribution is None:
+                print(
+                    f"    [trader {month}] satellite attribution omitted: "
+                    "incomplete or inconsistent point-in-time metadata"
+                )
 
         try:
             memory, _ = get_memory_components(self.cfg)
@@ -968,17 +1901,14 @@ class BenchmarkEvaluator(ABC):
                 active_return=portfolio_result.active_return,
                 total_cost=portfolio_result.total_cost,
                 contributions=portfolio_result.contributions,
-                reasoning=str(judged.get("model_response", "") or answer),
+                anchor_attribution=anchor_attribution,
+                satellite_attribution=satellite_attribution,
                 parse_ok=parsed.ok,
             )
             print(f"    trader[{month}] {operation}")
         except Exception as exc:
             print(f"    [trader {month}] episode logging failed: {exc}")
 
-        configured_data_dir = Path(str(self.cfg.get("data_dir", "data")))
-        if not configured_data_dir.is_absolute():
-            configured_data_dir = _REPO_ROOT / configured_data_dir
-        ashare_data_dir = configured_data_dir / "ashare"
         try:
             feature_rows = compute_trader_feature_rows(
                 entry_date,
@@ -1174,6 +2104,7 @@ class JSONLDatasetEvaluator(BenchmarkEvaluator):
                 try:
                     task = self.parse_func(line.strip())
                     if self.filter_func(task):
+                        self._attach_trader_anchor_policy(task)
                         tasks.append(task)
 
                 except json.JSONDecodeError as e:

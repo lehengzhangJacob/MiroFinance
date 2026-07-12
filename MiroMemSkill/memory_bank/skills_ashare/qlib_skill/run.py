@@ -12,6 +12,7 @@ Subcommands:
     signal    daily cross-sectional IC / RankIC / ICIR from pred vs label
     backtest  TopkDropoutStrategy portfolio backtest vs benchmark
     report    aggregate meta/signal/backtest into outputs/<run>/report.md
+    excess_walkforward  strict monthly excess-return scores vs CSI300
 
 `convert`, `signal` and `report` run on plain numpy/pandas; `train`,
 `predict` and `backtest` require the Qlib conda env
@@ -21,7 +22,9 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import pickle
 import sys
@@ -42,8 +45,10 @@ os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 from schema import (  # noqa: E402
     BacktestMetrics,
+    EXCESS_HORIZON_SESSIONS,
     SignalMetrics,
     envelope,
+    excess_target_metadata,
     label_expression,
     normalize_date,
     validate_run_name,
@@ -323,6 +328,427 @@ def cmd_walkforward(args: argparse.Namespace, cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# excess_walkforward: strict stock-minus-CSI300 point-in-time scores
+# ---------------------------------------------------------------------------
+
+
+_EXCESS_OUTPUT_COLUMNS = [
+    "signal_date",
+    "ts_code",
+    "score",
+    "rank",
+    "n_stocks",
+    "train_end",
+    "target",
+]
+
+
+def _compact_ashare_date(value: Any) -> str:
+    compact = str(value).strip().replace("-", "").replace("/", "")
+    if len(compact) != 8 or not compact.isdigit():
+        raise ValueError(f"invalid A-share date: {value!r}")
+    return compact
+
+
+def _iso_date(compact: str) -> str:
+    return f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
+
+
+def _load_open_days(cache: Path) -> list[str]:
+    cal = pd.read_csv(cache / "trade_cal.csv", dtype={"cal_date": str})
+    required = {"cal_date", "is_open"}
+    missing = required.difference(cal.columns)
+    if missing:
+        raise ValueError(f"trade_cal.csv missing columns: {sorted(missing)}")
+    days = [
+        _compact_ashare_date(value)
+        for value in cal.loc[cal["is_open"].astype(int) == 1, "cal_date"]
+    ]
+    days = sorted(days)
+    if len(days) != len(set(days)):
+        raise ValueError("trade_cal.csv contains duplicate open dates")
+    return days
+
+
+def _month_key(value: str, param: str) -> str:
+    key = str(value).strip().replace("-", "")
+    if len(key) != 6 or not key.isdigit() or not "01" <= key[4:] <= "12":
+        raise ValueError(f"{param} must be YYYY-MM, got: {value!r}")
+    return key
+
+
+def _monthly_decision_dates(
+    days: list[str],
+    start_month: str,
+    end_month: str,
+) -> list[str]:
+    lo = _month_key(start_month, "start-month")
+    hi = _month_key(end_month, "end-month")
+    if lo > hi:
+        raise ValueError("start-month must not be after end-month")
+    firsts: dict[str, str] = {}
+    for day in days:
+        firsts.setdefault(day[:6], day)
+    return [day for month, day in sorted(firsts.items()) if lo <= month <= hi]
+
+
+def _strict_train_end_index(decision_index: int, horizon: int) -> int:
+    """Latest label-origin row whose T+h+1 close is before the decision."""
+    if horizon < 1:
+        raise ValueError(f"horizon must be >= 1, got {horizon}")
+    return decision_index - horizon - 2
+
+
+def _forward_return_series(
+    path: Path,
+    *,
+    close_column: str,
+    calendar: list[str],
+    decision_date: str,
+    horizon: int,
+) -> pd.Series:
+    """Build Qlib-convention forward returns without reading a future label."""
+    frame = pd.read_csv(path, dtype={"trade_date": str})
+    required = {"trade_date", close_column}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"{path.name} missing columns: {sorted(missing)}")
+    frame = frame.loc[:, ["trade_date", close_column]].copy()
+    frame["trade_date"] = frame["trade_date"].map(_compact_ashare_date)
+    frame = frame[frame["trade_date"] < decision_date].sort_values("trade_date")
+    if frame["trade_date"].duplicated().any():
+        raise ValueError(f"{path.name} contains duplicate trade dates")
+
+    available_days = [day for day in calendar if day < decision_date]
+    closes = pd.to_numeric(
+        frame.set_index("trade_date")[close_column], errors="coerce"
+    ).reindex(available_days)
+    start_close = closes.shift(-1)
+    end_close = closes.shift(-(horizon + 1))
+    returns = end_close.divide(start_close).subtract(1.0)
+    returns = returns.where(
+        start_close.notna() & end_close.notna() & start_close.ne(0.0)
+    )
+    returns.name = "forward_return"
+    return returns
+
+
+def _assert_labels_settle_before(
+    index: pd.MultiIndex,
+    *,
+    calendar: list[str],
+    decision_date: str,
+    horizon: int,
+) -> None:
+    positions = {day: position for position, day in enumerate(calendar)}
+    decision_index = positions[decision_date]
+    origins = {
+        timestamp.strftime("%Y%m%d")
+        for timestamp in pd.to_datetime(index.get_level_values("datetime")).unique()
+    }
+    for origin in origins:
+        origin_index = positions.get(origin)
+        if origin_index is None:
+            raise ValueError(f"feature date {origin} is absent from trade_cal.csv")
+        settlement_index = origin_index + horizon + 1
+        if settlement_index >= decision_index:
+            settlement = (
+                calendar[settlement_index]
+                if settlement_index < len(calendar)
+                else "after-calendar-end"
+            )
+            raise RuntimeError(
+                f"label from {origin} settles {settlement}, not before {decision_date}"
+            )
+
+
+def _build_explicit_excess_labels(
+    cache: Path,
+    index: pd.MultiIndex,
+    *,
+    calendar: list[str],
+    decision_date: str,
+    horizon: int,
+) -> pd.Series:
+    """Compute stock and benchmark legs after Alpha158 feature preparation."""
+    _assert_labels_settle_before(
+        index,
+        calendar=calendar,
+        decision_date=decision_date,
+        horizon=horizon,
+    )
+    benchmark = _forward_return_series(
+        cache / "index_000300.SH.csv",
+        close_column="close",
+        calendar=calendar,
+        decision_date=decision_date,
+        horizon=horizon,
+    )
+
+    datetimes = pd.to_datetime(index.get_level_values("datetime"))
+    date_keys = pd.Index(datetimes.strftime("%Y%m%d"))
+    instruments = index.get_level_values("instrument").astype(str)
+    labels = pd.Series(float("nan"), index=index, dtype="float64", name="LABEL0")
+    for instrument in sorted(set(instruments)):
+        mask = instruments == instrument
+        stock = _forward_return_series(
+            cache / f"daily_{_from_qlib_code(instrument)}.csv",
+            close_column="close_qfq",
+            calendar=calendar,
+            decision_date=decision_date,
+            horizon=horizon,
+        )
+        keys = date_keys[mask]
+        stock_values = stock.reindex(keys).to_numpy()
+        benchmark_values = benchmark.reindex(keys).to_numpy()
+        labels.loc[mask] = stock_values - benchmark_values
+    return labels
+
+
+class _PreparedExcessDataset:
+    """Small DatasetH-compatible view over prepared Alpha158 features."""
+
+    def __init__(
+        self,
+        segments: dict[str, tuple[str, str]],
+        feature_frames: dict[str, pd.DataFrame],
+        labels: dict[str, pd.Series],
+    ) -> None:
+        self.segments = segments.copy()
+        self._frames: dict[str, pd.DataFrame] = {}
+        for segment, features in feature_frames.items():
+            pieces: dict[str, pd.DataFrame] = {"feature": features}
+            if segment in labels:
+                pieces["label"] = labels[segment].rename("LABEL0").to_frame()
+            frame = pd.concat(pieces, axis=1)
+            if segment in labels:
+                frame = frame.dropna(subset=[("label", "LABEL0")])
+            self._frames[segment] = frame
+
+    def prepare(self, segment: str, col_set: Any = "__all", **_: Any) -> pd.DataFrame:
+        frame = self._frames[segment]
+        if isinstance(col_set, str) and col_set not in {"__all", "__raw"}:
+            if col_set not in frame.columns.get_level_values(0):
+                raise KeyError(f"column group not available: {col_set}")
+            return frame[col_set]
+        if isinstance(col_set, (list, tuple)):
+            columns = [
+                column for column in frame.columns if column[0] in set(col_set)
+            ]
+            return frame.loc[:, columns]
+        return frame
+
+
+def _deterministic_lgb_model(model_class: Any, lgbm: dict[str, Any]) -> Any:
+    seed = int(lgbm.get("seed", 42))
+    return model_class(
+        loss=lgbm.get("loss", "mse"),
+        num_boost_round=int(lgbm.get("num_boost_round", 200)),
+        early_stopping_rounds=int(lgbm.get("early_stopping_rounds", 30)),
+        learning_rate=float(lgbm.get("learning_rate", 0.05)),
+        max_depth=int(lgbm.get("max_depth", 6)),
+        num_leaves=int(lgbm.get("num_leaves", 31)),
+        seed=seed,
+        feature_fraction_seed=seed,
+        bagging_seed=seed,
+        data_random_seed=seed,
+        deterministic=True,
+        force_col_wise=True,
+        num_threads=1,
+    )
+
+
+def _write_excess_manifest(
+    csv_path: Path,
+    frame: pd.DataFrame,
+    target_meta: dict[str, Any],
+) -> Path:
+    manifest_path = csv_path.with_name(f"{csv_path.stem}_manifest.json")
+    manifest = {
+        "version": 1,
+        "file": csv_path.name,
+        "sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
+        "row_count": int(len(frame)),
+        "columns": list(frame.columns),
+        "signal_dates": sorted(frame["signal_date"].astype(str).unique().tolist()),
+        **target_meta,
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def cmd_excess_walkforward(args: argparse.Namespace, cfg: dict) -> None:
+    """Train strict monthly Alpha158 models on explicit CSI300 excess labels."""
+    init_qlib(cfg)
+    from qlib.contrib.data.handler import Alpha158
+    from qlib.contrib.model.gbdt import LGBModel
+    from qlib.data.dataset import DatasetH
+    from qlib.data.dataset.handler import DataHandlerLP
+
+    exp = cfg["experiment"]
+    horizon = int(exp["label_horizon"])
+    if horizon != EXCESS_HORIZON_SESSIONS:
+        sys.exit(
+            "excess_walkforward requires experiment.label_horizon=20 "
+            f"(got {horizon})"
+        )
+    target = excess_target_metadata(horizon)
+    cache = Path(cfg["data"]["csv_cache_dir"])
+    calendar = _load_open_days(cache)
+    rebalances = _monthly_decision_dates(
+        calendar, args.start_month, args.end_month
+    )
+    if not rebalances:
+        sys.exit(f"no monthly decision dates in {args.start_month}..{args.end_month}")
+
+    train_start = normalize_date(exp["segments"]["train"][0], "train_start")
+    train_start_compact = train_start.replace("-", "")
+    try:
+        train_start_index = next(
+            index for index, day in enumerate(calendar) if day >= train_start_compact
+        )
+    except StopIteration:
+        sys.exit(f"train start {train_start} is after the available calendar")
+
+    positions = {day: index for index, day in enumerate(calendar)}
+    lgbm = exp["lgbm"]
+    rows: list[dict[str, Any]] = []
+    scored_months = 0
+    for day in rebalances:
+        decision_index = positions[day]
+        train_end_index = _strict_train_end_index(decision_index, horizon)
+        valid_split_index = train_end_index - 60
+        if valid_split_index <= train_start_index + 80:
+            print(f"skip {day}: not enough strictly settled train/valid history")
+            continue
+
+        train_end = calendar[train_end_index]
+        segments = {
+            "train": (train_start, _iso_date(calendar[valid_split_index])),
+            "valid": (
+                _iso_date(calendar[valid_split_index + 1]),
+                _iso_date(train_end),
+            ),
+            "test": (_iso_date(day), _iso_date(day)),
+        }
+        # The placeholder uses only the current close. Forward stock and CSI300
+        # labels are constructed explicitly below, after features are prepared.
+        handler = Alpha158(
+            instruments="all",
+            start_time=train_start,
+            end_time=_iso_date(day),
+            fit_start_time=segments["train"][0],
+            fit_end_time=segments["train"][1],
+            label=(["$close/$close-1"], ["UNUSED_LABEL"]),
+            learn_processors=[],
+        )
+        base_dataset = DatasetH(handler, segments=segments)
+        feature_frames = {
+            segment: base_dataset.prepare(
+                segment,
+                col_set="feature",
+                data_key=DataHandlerLP.DK_I,
+            )
+            for segment in ("train", "valid", "test")
+        }
+        if any(frame.empty for frame in feature_frames.values()):
+            print(f"skip {day}: empty Alpha158 feature segment")
+            continue
+
+        learning_index = feature_frames["train"].index.append(
+            feature_frames["valid"].index
+        )
+        excess_labels = _build_explicit_excess_labels(
+            cache,
+            learning_index,
+            calendar=calendar,
+            decision_date=day,
+            horizon=horizon,
+        )
+        labels = {
+            segment: excess_labels.reindex(feature_frames[segment].index)
+            for segment in ("train", "valid")
+        }
+        dataset = _PreparedExcessDataset(segments, feature_frames, labels)
+        if any(
+            dataset.prepare(segment, col_set="label").empty
+            for segment in ("train", "valid")
+        ):
+            print(f"skip {day}: no complete excess labels in train/valid")
+            continue
+
+        model = _deterministic_lgb_model(LGBModel, lgbm)
+        model.fit(dataset, verbose_eval=0)
+        pred = model.predict(dataset, segment="test").rename("score")
+        scored = pd.DataFrame(
+            {
+                "qlib_code": [
+                    str(value)
+                    for value in pred.index.get_level_values("instrument")
+                ],
+                "score": pd.to_numeric(pred.to_numpy(), errors="coerce"),
+            }
+        )
+        scored = scored[
+            scored["score"].map(lambda value: pd.notna(value) and math.isfinite(value))
+        ].copy()
+        if scored.empty:
+            print(f"skip {day}: empty prediction")
+            continue
+        scored["ts_code"] = scored["qlib_code"].map(_from_qlib_code)
+        scored = scored.sort_values(
+            "ts_code", ascending=True, kind="mergesort"
+        ).sort_values("score", ascending=False, kind="mergesort")
+        n_stocks = len(scored)
+        for rank, row in enumerate(scored.itertuples(index=False), start=1):
+            rows.append(
+                {
+                    "signal_date": day,
+                    "ts_code": row.ts_code,
+                    "score": round(float(row.score), 10),
+                    "rank": rank,
+                    "n_stocks": n_stocks,
+                    "train_end": train_end,
+                    "target": target.target,
+                }
+            )
+        scored_months += 1
+        print(
+            f"  {day}: scored {n_stocks} stocks "
+            f"(latest label origin {train_end}; settlement < {day})"
+        )
+
+    out_path = (
+        Path(args.out) if args.out else cache / "qlib_excess_signal.csv"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    output = pd.DataFrame(rows, columns=_EXCESS_OUTPUT_COLUMNS)
+    output.to_csv(out_path, index=False)
+    manifest_path = _write_excess_manifest(
+        out_path,
+        output,
+        target.to_dict(),
+    )
+    print_envelope(
+        envelope(
+            "excess_walkforward",
+            {"start_month": args.start_month, "end_month": args.end_month},
+            {
+                "decision_dates": len(rebalances),
+                "scored_months": scored_months,
+                "rows": len(output),
+                "manifest": str(manifest_path),
+                "target": target.target,
+            },
+            out=str(out_path),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # signal (plain pandas; no qlib import needed)
 # ---------------------------------------------------------------------------
 
@@ -528,6 +954,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--end-month", default="2025-06", help="last decision month YYYY-MM")
     p.add_argument("--out", default=None, help="output CSV (default: <csv_cache_dir>/qlib_signal.csv)")
     p.set_defaults(func=cmd_walkforward)
+
+    p = sub.add_parser(
+        "excess_walkforward",
+        help="strict monthly Alpha158 scores for 20-day excess return vs CSI300",
+    )
+    p.add_argument("--start-month", default="2024-07", help="first decision month YYYY-MM")
+    p.add_argument("--end-month", default="2025-06", help="last decision month YYYY-MM")
+    p.add_argument(
+        "--out",
+        default=None,
+        help="output CSV (default: <csv_cache_dir>/qlib_excess_signal.csv)",
+    )
+    p.set_defaults(func=cmd_excess_walkforward)
 
     p = sub.add_parser("signal", help="IC / RankIC / ICIR from saved pred+label")
     p.add_argument("--run-name", default="default")

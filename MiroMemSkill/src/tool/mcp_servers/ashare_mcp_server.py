@@ -20,7 +20,12 @@ from fastmcp import FastMCP
 
 from src.logging.logger import setup_mcp_logging
 from src.memory.monthly_reflection import compute_month_feature_rows
-from src.utils.ashare_momentum import render_relative_momentum_baseline
+from src.utils.ashare_market_breadth import render_market_breadth_regime
+from src.utils.ashare_momentum import (
+    build_relative_momentum_baseline,
+    render_relative_momentum_baseline,
+)
+from src.utils.ashare_satellite import render_excess_signal_candidates
 from src.utils.ashare_trader_features import (
     render_trader_universe_context,
     resolve_history_sessions,
@@ -269,12 +274,12 @@ def ashare_momentum_baseline(
     window: int = 20,
     top_k: int = 4,
 ) -> str:
-    """Build a point-in-time relative-momentum soft anchor for the whole pool.
+    """Build a point-in-time relative-momentum anchor for the whole pool.
 
     The tool ranks every stock by its trailing adjusted return minus the CSI
     300 return over the same window, then forms a max-25%-per-stock top-k
-    reference portfolio.  It never reads rows after ``as_of`` and never uses
-    realized holding-period returns or benchmark labels.
+    reference portfolio.  It never reads rows after ``as_of`` or realized
+    holding-period returns.
 
     Args:
         as_of: Decision-date cutoff (YYYY-MM-DD or YYYYMMDD).
@@ -287,6 +292,47 @@ def ashare_momentum_baseline(
         data_dir=_DATA_DIR,
         window=window,
         top_k=top_k,
+    )
+
+
+@mcp.tool()
+def ashare_market_breadth(as_of: str) -> str:
+    """Classify the full-A-share market as risk-on, neutral, or defensive.
+
+    The local cache is derived trade-date by trade-date from all A shares.  It
+    reports advance/decline breadth, the share above synthetic MA20/MA60, the
+    share with positive 20-session returns, and the CSI300 trend.  Every row is
+    hard-truncated to ``trade_date <= as_of``.
+
+    Args:
+        as_of: Decision-date cutoff (YYYY-MM-DD or YYYYMMDD).
+    """
+    return render_market_breadth_regime(as_of, data_dir=_DATA_DIR)
+
+
+@mcp.tool()
+def ashare_excess_satellite_candidates(as_of: str) -> str:
+    """Get strict PIT excess-return candidates after removing rel20 top4.
+
+    The tool computes the point-in-time 20-session relative-momentum leaders
+    internally, then returns the latest excess-signal cross section whose
+    signal date is on or before ``as_of``. It never renders realized labels.
+
+    Args:
+        as_of: Decision-date cutoff (YYYY-MM-DD or YYYYMMDD).
+    """
+    stock_pool = _meta()["stock_pool"]
+    baseline = build_relative_momentum_baseline(
+        as_of,
+        stock_pool,
+        data_dir=_DATA_DIR,
+        window=20,
+        top_k=4,
+    )
+    return render_excess_signal_candidates(
+        as_of,
+        baseline["weights"],
+        data_dir=_DATA_DIR,
     )
 
 

@@ -78,7 +78,14 @@ def build_relative_momentum_baseline(
                 "vol20_ann": row.get("vol20_ann", ""),
                 "max_dd120": row.get("max_dd120", ""),
                 "from_high250": row.get("from_high250", ""),
+                "ma20_gap": row.get("ma20_gap", ""),
                 "amount20_vs120": row.get("amount20_vs120", ""),
+                "pe_pct250": row.get("pe_pct250", ""),
+                "pb_pct250": row.get("pb_pct250", ""),
+                "ml_rank": row.get("ml_rank", ""),
+                "financial_ann_date": row.get("financial_ann_date", ""),
+                "or_yoy": row.get("or_yoy", ""),
+                "netprofit_yoy": row.get("netprofit_yoy", ""),
             }
         )
 
@@ -127,12 +134,12 @@ def render_relative_momentum_baseline(
     frame = pd.DataFrame(result["ranking"])
     return "\n".join(
         [
-            f"# A股 {window} 日相对动量 top{top_k} 软锚（严格点时）",
+            f"# A股 {window} 日相对动量 top{top_k} 硬锚基线（严格点时）",
             f"决策日: {result['as_of']}；排序指标: 个股近{window}日复权收益"
             f"减沪深300同期收益；仅使用决策日及以前数据。",
             "参考组合: " + ",".join(allocations),
-            "该组合是软锚而非未来收益标签；偏离时需用当前可见的反转、"
-            "中长期趋势、风险、量价、估值、财务或 Qlib 证据解释。",
+            "该组合是可交易锚点而非未来收益标签；硬锚实验中，top4 降配需至少"
+            "两类独立当前风险，且 Qlib 不得单独否决。",
             "## 全池排名与诊断 (CSV)",
             frame.to_csv(index=False),
         ]

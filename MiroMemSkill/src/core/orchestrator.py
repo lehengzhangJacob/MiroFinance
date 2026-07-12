@@ -33,9 +33,17 @@ from src.memory.context import (
     task_as_of_date,
 )
 from src.memory.feature_evidence import build_feature_evidence_block
+from src.utils.ashare_trader import (
+    canonicalize_core_satellite_answer,
+    validate_portfolio_answer,
+)
 
 LOGGER_LEVEL = os.getenv("LOGGER_LEVEL", "INFO")
 logger = bootstrap_logger(level=LOGGER_LEVEL)
+MAX_TRADER_PORTFOLIO_REPAIRS = 2
+REQUIRED_TRADER_ANCHOR_TOOLS = frozenset(
+    {"ashare_momentum_baseline", "ashare_market_breadth"}
+)
 
 
 def _list_tools(sub_agent_tool_managers: dict[str, ToolManager]):
@@ -64,6 +72,247 @@ def _generate_message_id() -> str:
     """Generate random message ID using common LLM format"""
     # Use 8-character random hex string, similar to OpenAI API format, avoid cross-conversation cache hits
     return f"msg_{uuid.uuid4().hex[:8]}"
+
+
+def _normalize_ashare_date(value: Any) -> str:
+    return str(value or "").strip().replace("-", "").replace("/", "")
+
+
+def _is_rate_limit_error(error: BaseException) -> bool:
+    """Recognize OpenAI 429 errors even when wrapped by tenacity RetryError."""
+    pending: list[Any] = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if (
+            type(current).__name__ == "RateLimitError"
+            or getattr(current, "status_code", None) == 429
+            or "rate limit" in str(current).lower()
+            or "error code: 429" in str(current).lower()
+        ):
+            return True
+        last_attempt = getattr(current, "last_attempt", None)
+        if last_attempt is not None:
+            try:
+                nested = last_attempt.exception()
+            except Exception:
+                nested = None
+            if nested is not None:
+                pending.append(nested)
+        for nested in (
+            getattr(current, "__cause__", None),
+            getattr(current, "__context__", None),
+        ):
+            if nested is not None:
+                pending.append(nested)
+    return False
+
+
+def _ashare_trader_anchor_enabled(
+    metadata: dict[str, Any] | None,
+) -> bool:
+    if not metadata or metadata.get("task_type") != "portfolio_allocation":
+        return False
+    policy = metadata.get("anchor_policy")
+    return bool(isinstance(policy, dict) and policy.get("enabled", False))
+
+
+def _ashare_trader_core_satellite_enabled(
+    metadata: dict[str, Any] | None,
+) -> bool:
+    if not _ashare_trader_anchor_enabled(metadata):
+        return False
+    policy = metadata.get("anchor_policy") if metadata else None
+    return bool(
+        isinstance(policy, dict)
+        and str(policy.get("mode", "legacy")).strip() == "core_satellite"
+    )
+
+
+def _ashare_trader_mandatory_tool_error(
+    metadata: dict[str, Any] | None,
+    tools_seen: set[str] | frozenset[str],
+) -> str:
+    if not _ashare_trader_anchor_enabled(metadata):
+        return ""
+    missing = sorted(REQUIRED_TRADER_ANCHOR_TOOLS - set(tools_seen))
+    if not missing:
+        return ""
+    return "mandatory hard-anchor tools not called successfully: " + ",".join(missing)
+
+
+def _replace_or_append_final_boxed(text: str, canonical_boxed: str) -> str:
+    """Replace the last balanced boxed value, or append the canonical one."""
+    raw = str(text or "").rstrip()
+    marker = r"\boxed{"
+    search_from = 0
+    last_span: tuple[int, int] | None = None
+    while search_from < len(raw):
+        start = raw.find(marker, search_from)
+        if start < 0:
+            break
+        cursor = start + len(marker)
+        depth = 1
+        while cursor < len(raw) and depth:
+            if raw[cursor] == "{":
+                depth += 1
+            elif raw[cursor] == "}":
+                depth -= 1
+            cursor += 1
+        if depth == 0:
+            last_span = (start, cursor)
+            search_from = cursor
+        else:
+            search_from = start + len(marker)
+    if last_span is not None:
+        start, end = last_span
+        return raw[:start] + canonical_boxed + raw[end:]
+    return f"{raw}\n{canonical_boxed}" if raw else canonical_boxed
+
+
+def _canonicalize_core_satellite_response(
+    answer: str,
+    metadata: dict[str, Any] | None,
+) -> tuple[str, Any]:
+    """Canonicalize one response and persist its auditable selection facts."""
+    canonical = canonicalize_core_satellite_answer(answer, metadata)
+    if canonical is None:
+        raise ValueError("core-satellite canonicalization was not active")
+    if metadata is None:
+        raise ValueError("core-satellite canonicalization requires task metadata")
+    candidate_rows = metadata.get("satellite_candidates")
+    if (
+        not isinstance(candidate_rows, list)
+        or not candidate_rows
+        or not isinstance(candidate_rows[0], dict)
+    ):
+        raise ValueError(
+            "core-satellite canonicalization requires structured satellite_candidates"
+        )
+    candidate_codes = {
+        str(row.get("ts_code", "")).strip().upper()
+        for row in candidate_rows
+        if isinstance(row, dict)
+    }
+    required_candidate_codes = set(canonical.selected_codes) | set(
+        canonical.deterministic_codes
+    )
+    if not required_candidate_codes.issubset(candidate_codes):
+        raise ValueError(
+            "core-satellite selection codes are missing from satellite_candidates"
+        )
+    signal_date = str(
+        metadata.get("satellite_signal_date")
+        or candidate_rows[0].get("signal_date")
+        or ""
+    ).strip()
+    target = str(
+        metadata.get("satellite_target")
+        or candidate_rows[0].get("target")
+        or ""
+    ).strip()
+    if not signal_date or not target:
+        raise ValueError(
+            "core-satellite candidates require signal date and target metadata"
+        )
+    selection = {
+        "selected_codes": list(canonical.selected_codes),
+        "deterministic_codes": list(canonical.deterministic_codes),
+        "selection_fallback": bool(canonical.selection_fallback),
+        "source": canonical.source,
+        "diagnostic": canonical.diagnostic,
+        "candidate_signal_date": signal_date,
+        "target": target,
+    }
+    metadata["satellite_selection"] = selection
+    return (
+        _replace_or_append_final_boxed(answer, canonical.canonical_boxed_answer),
+        canonical,
+    )
+
+
+def _validate_ashare_trader_tool_call(
+    tool_name: str,
+    arguments: Any,
+    metadata: dict[str, Any] | None,
+) -> None:
+    """Reject pool escapes and lookahead calls in unified-trader tasks."""
+    if not metadata or metadata.get("task_type") != "portfolio_allocation":
+        return
+    if not isinstance(arguments, dict):
+        raise ValueError("ashare-trader tool arguments must be an object")
+
+    pool = {str(code).upper() for code in metadata.get("stock_pool", [])}
+    ts_code = str(arguments.get("ts_code", "")).upper()
+    if ts_code and ts_code not in pool:
+        raise ValueError(
+            f"{tool_name} rejected stock outside the task pool: {ts_code}; "
+            "use only one of the 16 codes in the original task"
+        )
+
+    cutoff = _normalize_ashare_date(
+        metadata.get("entry_date") or metadata.get("as_of")
+    )
+    requested_as_of = _normalize_ashare_date(arguments.get("as_of"))
+    if (
+        cutoff
+        and requested_as_of
+        and len(cutoff) == 8
+        and len(requested_as_of) == 8
+        and requested_as_of > cutoff
+    ):
+        raise ValueError(
+            f"{tool_name} rejected lookahead as_of={requested_as_of}; "
+            f"the task cutoff is {cutoff}"
+        )
+    if (
+        _ashare_trader_anchor_enabled(metadata)
+        and tool_name in REQUIRED_TRADER_ANCHOR_TOOLS
+    ):
+        if requested_as_of != cutoff:
+            raise ValueError(
+                f"{tool_name} must use the exact task cutoff as_of={cutoff}"
+            )
+        if tool_name == "ashare_momentum_baseline":
+            try:
+                window = int(arguments.get("window", 20))
+                top_k = int(arguments.get("top_k", 4))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "ashare_momentum_baseline requires window=20 and top_k=4"
+                ) from exc
+            if window != 20 or top_k != 4:
+                raise ValueError(
+                    "ashare_momentum_baseline requires window=20 and top_k=4"
+                )
+
+
+def _ashare_trader_portfolio_error(
+    answer: str,
+    metadata: dict[str, Any] | None,
+) -> str:
+    if not metadata or metadata.get("task_type") != "portfolio_allocation":
+        return ""
+    validation = validate_portfolio_answer(answer, metadata)
+    return "" if validation.ok else validation.error
+
+
+def _ashare_trader_terminal_error(
+    answer: str,
+    metadata: dict[str, Any] | None,
+    tools_seen: set[str] | frozenset[str],
+) -> str:
+    errors: list[str] = []
+    mandatory_error = _ashare_trader_mandatory_tool_error(metadata, tools_seen)
+    if mandatory_error:
+        errors.append(mandatory_error)
+    portfolio_error = _ashare_trader_portfolio_error(answer, metadata)
+    if portfolio_error:
+        errors.append(portfolio_error)
+    return "; ".join(errors)
 
 
 def _filter_memskill_tool_definitions(
@@ -288,12 +537,13 @@ class Orchestrator:
 
         except Exception as e:
             logger.debug(f"⚠️ {purpose} call failed: {e}")
+            failure_kind = "rate_limit" if _is_rate_limit_error(e) else None
             self.task_log.log_step(
                 f"{purpose.lower().replace(' ', '_')}_error",
                 f"{purpose} failed: {str(e)}",
                 "failed",
             )
-            return None, True, None
+            return None, True, failure_kind
 
     async def _handle_summary_with_context_limit_retry(
         self,
@@ -313,10 +563,8 @@ class Orchestrator:
         Returns:
             str: final_answer_text - LLM generated summary text, error message on failure
 
-        Handle three LLM scenarios:
-        1. Call successful: return generated summary text
-        2. Context limit exceeded or network issues: remove assistant-user dialogue and retry, mark task as failed
-        3. Until only initial system-user messages remain
+        Only a confirmed context-limit error may remove dialogue.  Network and
+        429 failures keep the evidence intact and stop after bounded backoff.
         """
         retry_count = 0
 
@@ -341,6 +589,7 @@ class Orchestrator:
                 {"role": "user", "content": [{"type": "text", "text": summary_prompt}]}
             )
 
+            tool_calls_info = None
             for network_retry_count in range(5):
                 (
                     response_text,
@@ -356,22 +605,55 @@ class Orchestrator:
                 )
                 if response_text or tool_calls_info == "context_limit":
                     break
-                else:
-                    logger.error(
-                        f"LLM summary process call failed, attempt {network_retry_count+1}/5, retrying after 60 seconds..."
-                    )
+                delay = (
+                    min(300, 60 * (2**network_retry_count))
+                    if tool_calls_info == "rate_limit"
+                    else 60
+                )
+                if network_retry_count == 4:
+                    logger.error("LLM summary retries exhausted after attempt 5/5")
                     self.task_log.log_step(
-                        f"{agent_type}_summary_retry",
-                        f"LLM summary process call failed, attempt {network_retry_count+1}/5, retrying after 60 seconds...",
-                        "warning",
+                        f"{agent_type}_summary_retry_exhausted",
+                        "LLM summary retries exhausted after attempt 5/5; "
+                        "conversation context remains intact",
+                        "failed",
                     )
-                    await asyncio.sleep(60)
+                    break
+                logger.error(
+                    "LLM summary process call failed, attempt "
+                    f"{network_retry_count+1}/5, retrying after {delay} seconds..."
+                )
+                self.task_log.log_step(
+                    f"{agent_type}_summary_retry",
+                    "LLM summary process call failed, attempt "
+                    f"{network_retry_count+1}/5, retrying after {delay} seconds...",
+                    "warning",
+                )
+                await asyncio.sleep(delay)
 
             if response_text:
                 # Call successful: return generated summary text
                 return response_text
 
-            # Context limit exceeded or network issues: try removing messages and retry
+            if tool_calls_info != "context_limit":
+                if message_history and message_history[-1]["role"] == "user":
+                    message_history.pop()
+                failure = (
+                    "rate limit"
+                    if tool_calls_info == "rate_limit"
+                    else "network/API failure"
+                )
+                self.task_log.log_step(
+                    f"{agent_type}_summary_network_failed",
+                    f"Summary stopped after bounded {failure} retries; context kept intact",
+                    "failed",
+                )
+                return (
+                    "[ERROR] Unable to generate final summary after bounded "
+                    f"{failure} retries. Conversation context was preserved."
+                )
+
+            # Confirmed context limit: remove one dialogue pair and retry.
             retry_count += 1
             logger.debug(
                 f"LLM call failed (context_limit), attempt {retry_count} retry, removing recent assistant-user dialogue"
@@ -935,10 +1217,29 @@ Your objective is maximum completeness, transparency, and detailed documentation
         if max_turns < 0:
             max_turns = sys.maxsize
         turn_count = 0
+        trader_repair_count = 0
         task_failed = False  # Track whether task failed
         ashare_tools_seen: set[str] = set()
         feature_evidence_attempted = False
         assistant_response_text = ""
+        core_satellite_intent_text = ""
+
+        def canonicalize_core_satellite_terminal(answer: str) -> str:
+            nonlocal core_satellite_intent_text
+            core_satellite_intent_text = answer
+            canonical_text, canonical = _canonicalize_core_satellite_response(
+                answer,
+                metadata,
+            )
+            selection = dict((metadata or {}).get("satellite_selection", {}))
+            self.task_log.log_step(
+                "trader_core_satellite_canonicalized",
+                canonical.diagnostic,
+                "success",
+                metadata=selection,
+            )
+            return canonical_text
+
         while turn_count < max_turns:
             turn_count += 1
             logger.debug(f"\n--- Main Agent Turn {turn_count} ---")
@@ -962,6 +1263,18 @@ Your objective is maximum completeness, transparency, and detailed documentation
             # Handle LLM response
             if assistant_response_text:
                 if should_break:
+                    if (
+                        _ashare_trader_core_satellite_enabled(metadata)
+                        and not _ashare_trader_mandatory_tool_error(
+                            metadata,
+                            ashare_tools_seen,
+                        )
+                    ):
+                        assistant_response_text = (
+                            canonicalize_core_satellite_terminal(
+                                assistant_response_text
+                            )
+                        )
                     break
             else:
                 # LLM call failed, mark task as failed and end current turn
@@ -987,6 +1300,52 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 or len(tool_calls) < 2
                 or (len(tool_calls[0]) == 0 and len(tool_calls[1]) == 0)
             ):
+                if _ashare_trader_core_satellite_enabled(metadata):
+                    portfolio_error = _ashare_trader_mandatory_tool_error(
+                        metadata,
+                        ashare_tools_seen,
+                    )
+                    if not portfolio_error:
+                        assistant_response_text = (
+                            canonicalize_core_satellite_terminal(
+                                assistant_response_text or ""
+                            )
+                        )
+                        logger.debug(
+                            "System canonicalized the core-satellite allocation."
+                        )
+                        break
+                else:
+                    portfolio_error = _ashare_trader_terminal_error(
+                        assistant_response_text or "",
+                        metadata,
+                        ashare_tools_seen,
+                    )
+                if (
+                    portfolio_error
+                    and trader_repair_count < MAX_TRADER_PORTFOLIO_REPAIRS
+                ):
+                    trader_repair_count += 1
+                    repair_prompt = (
+                        "你的终局组合未通过确定性 A 股硬约束复核："
+                        f"{portfolio_error}。请保留已有点时分析，只完成错误要求的"
+                        "必要工具调用或仓位修正，不扩展其他搜索；随后重新给出正文"
+                        "和最后一行 boxed 组合。"
+                    )
+                    message_history.append(
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": repair_prompt}],
+                        }
+                    )
+                    self.task_log.log_step(
+                        "trader_portfolio_repair",
+                        "Repair "
+                        f"{trader_repair_count}/{MAX_TRADER_PORTFOLIO_REPAIRS} "
+                        f"requested: {portfolio_error}",
+                        "warning",
+                    )
+                    continue
                 # No tool calls, consider as final answer
                 logger.debug("LLM did not request tool use, process ends.")
                 break  # Exit loop
@@ -1013,6 +1372,11 @@ Your objective is maximum completeness, transparency, and detailed documentation
 
                 call_start_time = time.time()
                 try:
+                    _validate_ashare_trader_tool_call(
+                        tool_name,
+                        arguments,
+                        metadata,
+                    )
                     if server_name.startswith("agent-"):
                         sub_agent_result = await self.run_sub_agent(
                             server_name, str(arguments), keep_tool_result
@@ -1030,7 +1394,13 @@ Your objective is maximum completeness, transparency, and detailed documentation
                                 arguments=arguments,
                             )
                         )
-                        if server_name == "tool-ashare":
+                        if (
+                            server_name == "tool-ashare"
+                            and not (
+                                isinstance(tool_result, dict)
+                                and tool_result.get("error")
+                            )
+                        ):
                             ashare_tools_seen.add(tool_name)
 
                     call_end_time = time.time()
@@ -1209,12 +1579,17 @@ Your objective is maximum completeness, transparency, and detailed documentation
         terminal_has_boxed_answer = (
             bool(assistant_response_text)
             and "\\boxed{" in assistant_response_text.replace(" ", "")
+            and not _ashare_trader_terminal_error(
+                assistant_response_text,
+                metadata,
+                ashare_tools_seen,
+            )
         )
         if reuse_terminal_response and not task_failed and terminal_has_boxed_answer:
             final_answer_text = assistant_response_text
             self.task_log.log_step(
                 "final_summary_reused",
-                "Reused terminal boxed response without another LLM call",
+                "Reused terminal valid boxed response without another LLM call",
             )
         else:
             # Use context limit retry logic to generate final summary
@@ -1335,6 +1710,52 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 final_answer_text, self.llm_client
             )
         )
+        mandatory_tool_error = _ashare_trader_mandatory_tool_error(
+            metadata,
+            ashare_tools_seen,
+        )
+        if (
+            _ashare_trader_core_satellite_enabled(metadata)
+            and not mandatory_tool_error
+        ):
+            canonicalization_source = (
+                core_satellite_intent_text or final_answer_text
+            )
+            _, canonical = _canonicalize_core_satellite_response(
+                canonicalization_source,
+                metadata,
+            )
+            final_answer_text = _replace_or_append_final_boxed(
+                final_answer_text,
+                canonical.canonical_boxed_answer,
+            )
+            final_summary, _ = self.output_formatter.format_final_summary_and_log(
+                final_answer_text,
+                self.llm_client,
+            )
+            final_boxed_answer = canonical.canonical_boxed_answer
+            self.task_log.log_step(
+                "trader_core_satellite_finalized",
+                "Forced the final boxed answer to the canonical allocation",
+                "success",
+                metadata=dict((metadata or {}).get("satellite_selection", {})),
+            )
+        portfolio_error = _ashare_trader_terminal_error(
+            final_boxed_answer,
+            metadata,
+            ashare_tools_seen,
+        )
+        if portfolio_error:
+            self.task_log.log_step(
+                "invalid_trader_portfolio",
+                f"Rejected final portfolio: {portfolio_error}",
+                "failed",
+            )
+            final_summary += (
+                "\n\n"
+                f"[INVALID ASHARE-TRADER PORTFOLIO] {portfolio_error}"
+            )
+            final_boxed_answer = ""
 
         logger.debug(f"\n{'=' * 20} Task {task_id} Finished {'=' * 20}")
         self.task_log.log_step(

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.utils.ashare_rank import parse_ranked_codes
-from src.utils.ashare_trader import parse_portfolio_weights
+from src.utils.ashare_trader import validate_portfolio_answer
 
 EVALUATION_PROMPT_SIMPLEQA = """
 Your job is to look at a question, a gold target, and a predicted answer, and then assign a grade of either ["CORRECT", "INCORRECT", "NOT_ATTEMPTED"].
@@ -533,14 +533,8 @@ async def verify_answer_for_datasets(
         # scripts/ashare/eval_trader.py.  Framework pass@1 only means the
         # long-only/cash allocation is complete and obeys its hard limits.
         if "ashare-trader" in benchmark_name and metadata:
-            parsed = parse_portfolio_weights(
-                predicted_answer,
-                metadata.get("stock_pool", []),
-                max_stock_weight=float(
-                    metadata.get("max_stock_weight", 0.25)
-                ),
-            )
-            return "CORRECT" if parsed.ok else "INCORRECT"
+            validation = validate_portfolio_answer(predicted_answer, metadata)
+            return "CORRECT" if validation.ok else "INCORRECT"
 
         # Ranking quality is continuous and is evaluated offline by
         # scripts/ashare/eval_rank.py.  The framework-level pass@1 result only

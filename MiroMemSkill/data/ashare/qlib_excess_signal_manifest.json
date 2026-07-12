@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "file": "qlib_excess_signal.csv",
+  "sha256": "1da811f9ebfc852cc2404b72d2f5e8450f5e01a1bd6986d98fcb22462f338a4b",
+  "row_count": 192,
+  "columns": [
+    "signal_date",
+    "ts_code",
+    "score",
+    "rank",
+    "n_stocks",
+    "train_end",
+    "target"
+  ],
+  "signal_dates": [
+    "20240701",
+    "20240801",
+    "20240902",
+    "20241008",
+    "20241101",
+    "20241202",
+    "20250102",
+    "20250205",
+    "20250303",
+    "20250401",
+    "20250506",
+    "20250603"
+  ],
+  "target": "excess_vs_000300.SH",
+  "benchmark": "000300.SH",
+  "horizon_sessions": 20,
+  "label_start_offset_sessions": 1,
+  "label_end_offset_sessions": 21,
+  "stock_label_expression": "Ref($close,-21)/Ref($close,-1)-1"
+}

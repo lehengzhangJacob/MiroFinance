@@ -1,0 +1,10 @@
+defaults:
+  - ashare_trader_mem0
+  - _self_
+
+# Runtime already injects the authoritative core-satellite policy and candidates.
+skill_enabled: false
+skill_top_k: 0
+
+# Every attribution experiment must opt into an isolated, explicit run namespace.
+namespace: "ashare_trader_core_satellite_attribution_${oc.env:ASHARE_TRADER_RUN_ID}"

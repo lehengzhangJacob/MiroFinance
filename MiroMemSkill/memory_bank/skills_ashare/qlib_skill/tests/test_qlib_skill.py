@@ -13,8 +13,10 @@ importable, and runs against the real local cache in the Qlib env:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -27,10 +29,14 @@ import numpy as np
 import pandas as pd
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = SKILL_DIR.parents[2]
 sys.path.insert(0, str(SKILL_DIR))
+sys.path.insert(0, str(REPO_ROOT))
 
 import qlib_dump  # noqa: E402
+import run as runner  # noqa: E402
 import schema  # noqa: E402
+from src.utils import ashare_satellite  # noqa: E402
 
 try:
     import qlib  # noqa: F401
@@ -38,6 +44,10 @@ try:
     HAS_QLIB = True
 except Exception:
     HAS_QLIB = False
+
+RUN_QLIB_E2E = HAS_QLIB and os.environ.get(
+    "QLIB_SKILL_RUN_E2E", ""
+).strip().lower() in {"1", "true", "yes"}
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +73,250 @@ class TestSchema(unittest.TestCase):
         with self.assertRaises(ValueError):
             schema.label_expression(0)
 
+    def test_excess_target_metadata(self):
+        target = schema.excess_target_metadata()
+        self.assertEqual(target.target, "excess_vs_000300.SH")
+        self.assertEqual(target.benchmark, "000300.SH")
+        self.assertEqual(target.horizon_sessions, 20)
+        self.assertEqual(target.label_start_offset_sessions, 1)
+        self.assertEqual(target.label_end_offset_sessions, 21)
+        self.assertEqual(
+            target.stock_label_expression,
+            "Ref($close,-21)/Ref($close,-1)-1",
+        )
+
     def test_envelope(self):
         body = schema.envelope("train", {"a": 1, "b": None}, {"count": 3}, out="/tmp/x")
         self.assertEqual(body["count"], 3)
         self.assertEqual(body["out"], "/tmp/x")
         self.assertNotIn("b", body["params"])
+
+
+# ---------------------------------------------------------------------------
+# strict excess target + reusable satellite loader
+# ---------------------------------------------------------------------------
+
+
+class TestExcessHelpers(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="qlib_excess_test_"))
+        self.calendar = [f"202501{day:02d}" for day in range(1, 11)]
+        pd.DataFrame(
+            {
+                "trade_date": self.calendar[:-1],
+                "close_qfq": [float(value) for value in range(10, 19)],
+            }
+        ).to_csv(self.tmp / "daily_000001.SH.csv", index=False)
+        pd.DataFrame(
+            {
+                "trade_date": self.calendar[:-1],
+                "close": [float(value) for value in range(100, 109)],
+            }
+        ).to_csv(self.tmp / "index_000300.SH.csv", index=False)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_explicit_stock_minus_benchmark_label(self):
+        stock = pd.read_csv(
+            self.tmp / "daily_000001.SH.csv",
+            dtype={"trade_date": str},
+        )
+        stock.loc[len(stock)] = {
+            "trade_date": self.calendar[-1],
+            "close_qfq": 1e12,
+        }
+        stock.to_csv(self.tmp / "daily_000001.SH.csv", index=False)
+        benchmark = pd.read_csv(
+            self.tmp / "index_000300.SH.csv",
+            dtype={"trade_date": str},
+        )
+        benchmark.loc[len(benchmark)] = {
+            "trade_date": self.calendar[-1],
+            "close": 1e12,
+        }
+        benchmark.to_csv(self.tmp / "index_000300.SH.csv", index=False)
+
+        index = pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2025-01-01"), "SH000001")],
+            names=["datetime", "instrument"],
+        )
+        labels = runner._build_explicit_excess_labels(
+            self.tmp,
+            index,
+            calendar=self.calendar,
+            decision_date="20250110",
+            horizon=2,
+        )
+        expected = (13.0 / 11.0 - 1.0) - (103.0 / 101.0 - 1.0)
+        self.assertAlmostEqual(float(labels.iloc[0]), expected)
+
+    def test_settlement_is_strictly_before_decision(self):
+        self.assertEqual(runner._strict_train_end_index(9, 2), 5)
+        settled = pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2025-01-06"), "SH000001")],
+            names=["datetime", "instrument"],
+        )
+        runner._assert_labels_settle_before(
+            settled,
+            calendar=self.calendar,
+            decision_date="20250110",
+            horizon=2,
+        )
+        leaking = pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2025-01-07"), "SH000001")],
+            names=["datetime", "instrument"],
+        )
+        with self.assertRaises(RuntimeError):
+            runner._assert_labels_settle_before(
+                leaking,
+                calendar=self.calendar,
+                decision_date="20250110",
+                horizon=2,
+            )
+
+    def test_excess_manifest_contains_auditable_target_schema(self):
+        output = self.tmp / "qlib_excess_signal.csv"
+        frame = pd.DataFrame(
+            [
+                {
+                    "signal_date": "20250110",
+                    "ts_code": "600001.SH",
+                    "score": 0.25,
+                    "rank": 1,
+                    "n_stocks": 1,
+                    "train_end": "20241210",
+                    "target": "excess_vs_000300.SH",
+                }
+            ]
+        )
+        frame.to_csv(output, index=False)
+        target = schema.excess_target_metadata().to_dict()
+        manifest_path = runner._write_excess_manifest(output, frame, target)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["file"], output.name)
+        self.assertEqual(manifest["row_count"], 1)
+        self.assertEqual(manifest["columns"], list(frame.columns))
+        self.assertEqual(
+            manifest["sha256"],
+            hashlib.sha256(output.read_bytes()).hexdigest(),
+        )
+        for key, value in target.items():
+            self.assertEqual(manifest[key], value)
+
+
+class TestSatelliteLoader(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="ashare_satellite_test_"))
+        self.signal = self.tmp / "qlib_excess_signal.csv"
+        pd.DataFrame(
+            [
+                {
+                    "signal_date": "20241202",
+                    "ts_code": "600004.SH",
+                    "score": 0.9,
+                    "rank": 1,
+                    "n_stocks": 1,
+                    "train_end": "20241108",
+                    "target": "excess_vs_000300.SH",
+                },
+                {
+                    "signal_date": "20250102",
+                    "ts_code": "600002.SH",
+                    "score": 0.3,
+                    "rank": 2,
+                    "n_stocks": 3,
+                    "train_end": "20241206",
+                    "target": "excess_vs_000300.SH",
+                },
+                {
+                    "signal_date": "20250102",
+                    "ts_code": "600001.SH",
+                    "score": 0.3,
+                    "rank": 3,
+                    "n_stocks": 3,
+                    "train_end": "20241206",
+                    "target": "excess_vs_000300.SH",
+                },
+                {
+                    "signal_date": "20250102",
+                    "ts_code": "600003.SH",
+                    "score": 0.4,
+                    "rank": 1,
+                    "n_stocks": 3,
+                    "train_end": "20241206",
+                    "target": "excess_vs_000300.SH",
+                },
+                {
+                    "signal_date": "20250120",
+                    "ts_code": "600999.SH",
+                    "score": 999.0,
+                    "rank": 1,
+                    "n_stocks": 1,
+                    "train_end": "20241220",
+                    "target": "excess_vs_000300.SH",
+                },
+            ]
+        ).to_csv(self.signal, index=False)
+        digest = hashlib.sha256(self.signal.read_bytes()).hexdigest()
+        (self.tmp / "qlib_excess_signal_manifest.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "file": self.signal.name,
+                    "sha256": digest,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_latest_sort_exclusion_and_exact_mode(self):
+        rows = ashare_satellite.load_excess_signal_candidates(
+            "2025-01-10",
+            ["600003.SH"],
+            data_dir=self.tmp,
+        )
+        self.assertEqual(
+            [row["ts_code"] for row in rows],
+            ["600001.SH", "600002.SH"],
+        )
+        self.assertTrue(all(row["signal_date"] == "20250102" for row in rows))
+        self.assertTrue(all(row["signal_date"] <= "20250110" for row in rows))
+        self.assertNotIn("600999.SH", [row["ts_code"] for row in rows])
+        self.assertEqual(
+            set(rows[0]),
+            {
+                "signal_date",
+                "ts_code",
+                "score",
+                "rank",
+                "n_stocks",
+                "train_end",
+                "target",
+            },
+        )
+        self.assertEqual(
+            ashare_satellite.load_excess_signal_candidates(
+                "2025-01-10",
+                [],
+                data_dir=self.tmp,
+                exact_date=True,
+            ),
+            [],
+        )
+
+    def test_manifest_checksum_mismatch_is_rejected(self):
+        with self.signal.open("a", encoding="utf-8") as handle:
+            handle.write("\n")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            ashare_satellite.load_excess_signal_candidates(
+                "20250102",
+                [],
+                data_dir=self.tmp,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +422,10 @@ class TestConverter(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skipUnless(HAS_QLIB, "pyqlib not importable in this interpreter")
+@unittest.skipUnless(
+    RUN_QLIB_E2E,
+    "set QLIB_SKILL_RUN_E2E=1 in a pyqlib environment to run full retraining",
+)
 class TestEndToEnd(unittest.TestCase):
     RUN = "_test_e2e"
 

@@ -5,7 +5,14 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
+
+from src.utils.ashare_anchor import (
+    AnchorPolicy,
+    AnchorValidationResult,
+    assemble_core_satellite_allocation,
+    validate_anchor_from_metadata,
+)
 
 
 DEFAULT_MAX_STOCK_WEIGHT = 0.25
@@ -21,6 +28,44 @@ class PortfolioParseResult:
     cash: float
     ok: bool
     error: str = ""
+
+
+@dataclass(frozen=True)
+class PortfolioValidationResult:
+    parsed: PortfolioParseResult
+    anchor: AnchorValidationResult | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.parsed.ok and bool(self.anchor is None or self.anchor.ok)
+
+    @property
+    def error(self) -> str:
+        if not self.parsed.ok:
+            return self.parsed.error
+        return self.anchor.error if self.anchor is not None else ""
+
+
+@dataclass(frozen=True)
+class CoreSatelliteCanonicalizationResult:
+    canonical_boxed_answer: str
+    weights: dict[str, float]
+    cash: float
+    selected_codes: tuple[str, ...]
+    deterministic_codes: tuple[str, ...]
+    selection_fallback: bool
+    selection_source: str
+    diagnostic: str
+
+    @property
+    def boxed_answer(self) -> str:
+        """Compatibility alias for the canonical boxed allocation."""
+        return self.canonical_boxed_answer
+
+    @property
+    def source(self) -> str:
+        """Metadata-ready selection source."""
+        return self.selection_source
 
 
 @dataclass(frozen=True)
@@ -47,6 +92,82 @@ def _boxed_candidate(text: str) -> str:
     raw = str(text or "").strip()
     boxed = re.findall(r"\\boxed\{([^{}]*)\}", raw, flags=re.DOTALL)
     return boxed[-1].strip() if boxed else raw
+
+
+_STOCK_CODE_INTENT_PATTERN = re.compile(
+    r"(?<!\d)(\d{6}(?:\.(?:SH|SZ))?)(?![A-Z0-9])",
+    flags=re.IGNORECASE,
+)
+
+
+def _canonical_pool(
+    valid_pool: Any,
+) -> tuple[list[str], set[str], dict[str, str]]:
+    if not isinstance(valid_pool, Sequence) or isinstance(
+        valid_pool, (str, bytes)
+    ):
+        raise ValueError(
+            "core-satellite canonicalization requires stock_pool to be a sequence"
+        )
+
+    pool: list[str] = []
+    pool_set: set[str] = set()
+    for raw_code in valid_pool:
+        code = str(raw_code).strip().upper()
+        if code and code not in pool_set:
+            pool.append(code)
+            pool_set.add(code)
+    if not pool:
+        raise ValueError(
+            "core-satellite canonicalization requires a non-empty stock_pool"
+        )
+
+    suffix_by_digits = {
+        match.group(1): code
+        for code in pool
+        if (match := re.fullmatch(r"(\d{6})\.(?:SH|SZ)", code))
+    }
+    return pool, pool_set, suffix_by_digits
+
+
+def _pool_code(
+    value: Any,
+    pool_set: set[str],
+    suffix_by_digits: Mapping[str, str],
+) -> str:
+    code = str(value or "").strip().upper()
+    if code in pool_set:
+        return code
+    if re.fullmatch(r"\d{6}", code):
+        return suffix_by_digits.get(code, "")
+    return ""
+
+
+def _answer_code_intent(
+    text: str,
+    pool_set: set[str],
+    suffix_by_digits: Mapping[str, str],
+) -> tuple[tuple[str, ...], bool]:
+    seen: set[str] = set()
+    codes: list[str] = []
+    has_outside_pool_code = False
+    for match in _STOCK_CODE_INTENT_PATTERN.finditer(_boxed_candidate(text)):
+        code = _pool_code(match.group(1), pool_set, suffix_by_digits)
+        if not code:
+            has_outside_pool_code = True
+            continue
+        if code and code not in seen:
+            seen.add(code)
+            codes.append(code)
+    return tuple(codes), has_outside_pool_code
+
+
+def _canonical_weight(value: Any) -> str:
+    rendered = f"{float(value):.10f}".rstrip("0").rstrip(".")
+    if "." not in rendered:
+        return rendered + ".00"
+    whole, fraction = rendered.split(".", 1)
+    return whole + "." + fraction.ljust(2, "0")
 
 
 def parse_portfolio_weights(
@@ -162,6 +283,165 @@ def parse_portfolio_weights(
     }
     cash = max(0.0, float(parsed["CASH"]))
     return PortfolioParseResult(weights, cash, True)
+
+
+def canonicalize_core_satellite_answer(
+    text: str,
+    metadata: Mapping[str, Any] | None,
+) -> CoreSatelliteCanonicalizationResult | None:
+    """Canonicalize Agent satellite intent under the fixed core-satellite policy.
+
+    Disabled and legacy policies return ``None``. Active core-satellite policies
+    either return one fully assembled allocation or raise ``ValueError`` when
+    the hidden snapshot cannot support a valid allocation.
+    """
+    raw = dict(metadata or {})
+    policy = AnchorPolicy.from_mapping(raw.get("anchor_policy"))
+    if not policy.enabled or policy.mode != "core_satellite":
+        return None
+
+    _, pool_set, suffix_by_digits = _canonical_pool(raw.get("stock_pool", []))
+    snapshot = raw.get("anchor_snapshot")
+    if not isinstance(snapshot, Mapping) or not snapshot:
+        raise ValueError(
+            "core-satellite canonicalization requires a non-empty anchor_snapshot"
+        )
+
+    try:
+        snapshot_allocation = assemble_core_satellite_allocation(snapshot)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "core-satellite snapshot/candidates cannot form an allocation: "
+            f"{exc}"
+        ) from exc
+
+    core_codes = tuple(
+        _pool_code(code, pool_set, suffix_by_digits)
+        for code in snapshot_allocation.get("top4", [])
+    )
+    if len(core_codes) != 4 or len(set(core_codes)) != 4 or not all(core_codes):
+        raise ValueError(
+            "core-satellite snapshot top4 must contain four unique stock_pool codes"
+        )
+    core_set = set(core_codes)
+
+    eligible_codes: list[str] = []
+    eligible_set: set[str] = set()
+    for raw_code in snapshot_allocation.get(
+        "eligible_prediction_candidates", []
+    ):
+        code = _pool_code(raw_code, pool_set, suffix_by_digits)
+        if code and code not in core_set and code not in eligible_set:
+            eligible_set.add(code)
+            eligible_codes.append(code)
+
+    canonical_snapshot = dict(snapshot)
+    canonical_snapshot["top4"] = list(core_codes)
+    canonical_snapshot["ranked_prediction_candidates"] = eligible_codes
+    try:
+        deterministic = assemble_core_satellite_allocation(canonical_snapshot)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "core-satellite snapshot lacks enough in-pool eligible candidates: "
+            f"{exc}"
+        ) from exc
+
+    deterministic_codes = tuple(deterministic.get("satellite_codes", []))
+    required_count = int(deterministic.get("satellite_count", 0))
+    answer_codes, has_outside_pool_code = _answer_code_intent(
+        text,
+        pool_set,
+        suffix_by_digits,
+    )
+    satellite_intent = tuple(
+        code for code in answer_codes if code in eligible_set and code not in core_set
+    )
+    ineligible_non_core = tuple(
+        code
+        for code in answer_codes
+        if code not in core_set and code not in eligible_set
+    )
+
+    selection_fallback = (
+        has_outside_pool_code
+        or bool(ineligible_non_core)
+        or len(satellite_intent) != required_count
+    )
+    if selection_fallback:
+        assembled = deterministic
+        selection_source = "deterministic_fallback"
+        reasons = [
+            f"found {len(satellite_intent)} eligible satellite code(s); "
+            f"required {required_count}"
+        ]
+        if ineligible_non_core:
+            reasons.append(
+                "ineligible non-core code(s): " + ",".join(ineligible_non_core)
+            )
+        if has_outside_pool_code:
+            reasons.append("outside-pool stock code(s) present")
+        diagnostic = "; ".join(reasons) + "; deterministic fallback was used"
+    else:
+        try:
+            assembled = assemble_core_satellite_allocation(
+                canonical_snapshot,
+                selected_satellites=satellite_intent,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"eligible Agent satellite selection could not be assembled: {exc}"
+            ) from exc
+        selection_source = "agent"
+        diagnostic = (
+            f"accepted {required_count} eligible satellite code(s) from answer"
+        )
+
+    weights = {
+        str(code): float(weight)
+        for code, weight in assembled.get("weights", {}).items()
+    }
+    cash = float(assembled.get("cash", 0.0))
+    selected_codes = tuple(assembled.get("satellite_codes", []))
+    allocations = [
+        *(f"{code}:{_canonical_weight(weight)}" for code, weight in weights.items()),
+        f"CASH:{_canonical_weight(cash)}",
+    ]
+    canonical_answer = "\\boxed{" + ",".join(allocations) + "}"
+
+    validation = validate_portfolio_answer(canonical_answer, raw)
+    if not validation.ok:
+        raise ValueError(
+            "assembled core-satellite allocation failed validation: "
+            f"{validation.error}"
+        )
+
+    return CoreSatelliteCanonicalizationResult(
+        canonical_boxed_answer=canonical_answer,
+        weights=weights,
+        cash=cash,
+        selected_codes=selected_codes,
+        deterministic_codes=deterministic_codes,
+        selection_fallback=selection_fallback,
+        selection_source=selection_source,
+        diagnostic=diagnostic,
+    )
+
+
+def validate_portfolio_answer(
+    text: str,
+    metadata: Mapping[str, Any] | None,
+) -> PortfolioValidationResult:
+    """Apply syntax, pool, weight, and optional momentum-anchor constraints."""
+    raw = dict(metadata or {})
+    parsed = parse_portfolio_weights(
+        text,
+        raw.get("stock_pool", []),
+        max_stock_weight=float(raw.get("max_stock_weight", 0.25)),
+    )
+    if not parsed.ok:
+        return PortfolioValidationResult(parsed)
+    anchor = validate_anchor_from_metadata(parsed.weights, parsed.cash, raw)
+    return PortfolioValidationResult(parsed, anchor)
 
 
 def cash_allocation(valid_pool: Sequence[str]) -> PortfolioParseResult:
@@ -303,3 +583,85 @@ def evaluate_portfolio_month(
         weight_rank_ic=weight_rank_ic(weights, excess),
         contributions=contributions,
     )
+
+
+def evaluate_anchor_deviation(
+    actual_weights: Mapping[str, float],
+    actual_cash: float,
+    anchor_weights: Mapping[str, float],
+    anchor_cash: float,
+    stock_returns: Mapping[str, float],
+    index_return: float,
+    *,
+    starting_capital: float,
+    excess_returns: Mapping[str, float] | None = None,
+    open_cost: float = DEFAULT_OPEN_COST,
+    close_cost: float = DEFAULT_CLOSE_COST,
+    min_cost: float = DEFAULT_MIN_COST,
+    actual_result: PortfolioMonthResult | None = None,
+) -> dict[str, Any]:
+    """Attribute matured performance to deviation from a fixed anchor."""
+    actual = actual_result or evaluate_portfolio_month(
+        actual_weights,
+        actual_cash,
+        stock_returns,
+        index_return,
+        starting_capital=starting_capital,
+        excess_returns=excess_returns,
+        open_cost=open_cost,
+        close_cost=close_cost,
+        min_cost=min_cost,
+    )
+    anchor = evaluate_portfolio_month(
+        anchor_weights,
+        anchor_cash,
+        stock_returns,
+        index_return,
+        starting_capital=starting_capital,
+        excess_returns=excess_returns,
+        open_cost=open_cost,
+        close_cost=close_cost,
+        min_cost=min_cost,
+    )
+    actual_codes = sorted(
+        code for code, weight in actual_weights.items() if float(weight) > WEIGHT_TOLERANCE
+    )
+    anchor_codes = sorted(
+        code for code, weight in anchor_weights.items() if float(weight) > WEIGHT_TOLERANCE
+    )
+    all_codes = sorted(set(actual_weights) | set(anchor_weights))
+    weight_delta_contributions = {
+        code: (
+            float(actual_weights.get(code, 0.0))
+            - float(anchor_weights.get(code, 0.0))
+        )
+        * float(stock_returns.get(code, 0.0))
+        for code in all_codes
+        if abs(
+            float(actual_weights.get(code, 0.0))
+            - float(anchor_weights.get(code, 0.0))
+        )
+        > WEIGHT_TOLERANCE
+    }
+    return {
+        "anchor_weights": {
+            str(code): float(weight) for code, weight in anchor_weights.items()
+        },
+        "anchor_cash": float(anchor_cash),
+        "anchor_net_return": float(anchor.net_return),
+        "anchor_active_return": float(anchor.active_return),
+        "anchor_total_cost": float(anchor.total_cost),
+        "actual_net_return": float(actual.net_return),
+        "actual_active_return": float(actual.active_return),
+        "actual_total_cost": float(actual.total_cost),
+        "deviation_net_return": float(actual.net_return - anchor.net_return),
+        "deviation_active_return": float(
+            actual.active_return - anchor.active_return
+        ),
+        "cost_delta": float(actual.total_cost - anchor.total_cost),
+        "cash_delta": float(actual_cash - anchor_cash),
+        "overlap_count": len(set(actual_codes) & set(anchor_codes)),
+        "dropped_from_anchor": sorted(set(anchor_codes) - set(actual_codes)),
+        "added_vs_anchor": sorted(set(actual_codes) - set(anchor_codes)),
+        "weight_delta_contributions": weight_delta_contributions,
+    }

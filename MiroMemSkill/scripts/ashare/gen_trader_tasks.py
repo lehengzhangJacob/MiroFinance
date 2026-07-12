@@ -37,7 +37,8 @@ QUESTION_TEMPLATE = """\
 数据使用规则（务必遵守）：
 - 只能使用 ashare-market 工具，禁止网络搜索，禁止使用 {as_of} 之后的行情、新闻、财报、真实收益或事后排名；
 - 本地 Tushare 缓存有多少就看多少：lookback_days 不传或传 0 即返回截至 {as_of} 的全部可用数据；不限只数、不限次数、不限工具类型；
-- 可用工具包括 ashare_trader_universe_context、ashare_price_history、ashare_index_history、ashare_valuation、ashare_financials、ashare_ml_signal、ashare_stock_info、ashare_cross_section_snapshot 等，按需自由组合；
+- 可用工具包括 ashare_trader_universe_context、ashare_price_history、ashare_index_history、ashare_valuation、ashare_financials、ashare_ml_signal、ashare_momentum_baseline、ashare_market_breadth、ashare_excess_satellite_candidates、ashare_stock_info、ashare_cross_section_snapshot 等，按需自由组合；
+- 硬锚实验必须先调用 ashare_momentum_baseline 与 ashare_market_breadth；具体的 top4 暴露、核心/卫星结构、候选范围、风险证据与固定仓位规则一律以运行时追加的策略块为准，不得套用其他模式的规则；Qlib 不能单独否决核心动量股；
 - 必须先评估全池相对机会、风险和信号冲突，再决定选股、集中度与现金比例，不能把 16 只股票拆成互不相关的独立结论。
 
 输出要求：

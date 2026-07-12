@@ -12,6 +12,9 @@ from typing import Any, Optional
 
 _DATE_RE = re.compile(r"^(\d{4})-?(\d{2})-?(\d{2})$")
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+CSI300_TS_CODE = "000300.SH"
+EXCESS_HORIZON_SESSIONS = 20
+EXCESS_TARGET_NAME = f"excess_vs_{CSI300_TS_CODE}"
 
 
 def normalize_date(value: str, param: str = "date") -> str:
@@ -43,6 +46,42 @@ def label_expression(horizon: int) -> str:
     if horizon < 1:
         raise ValueError(f"label_horizon must be >= 1, got {horizon}")
     return f"Ref($close,-{horizon + 1})/Ref($close,-1)-1"
+
+
+@dataclass(frozen=True)
+class ExcessTargetMetadata:
+    """Definition of the explicit stock-minus-CSI300 forward-return target.
+
+    Qlib expressions are evaluated per instrument, so the benchmark leg is
+    computed from the CSI300 close series and subtracted after Alpha158 feature
+    preparation. Offsets follow Qlib's standard close-to-close label convention:
+    a row at T uses closes at T+1 and T+horizon+1.
+    """
+
+    target: str
+    benchmark: str
+    horizon_sessions: int
+    label_start_offset_sessions: int
+    label_end_offset_sessions: int
+    stock_label_expression: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def excess_target_metadata(
+    horizon: int = EXCESS_HORIZON_SESSIONS,
+) -> ExcessTargetMetadata:
+    """Return the auditable definition of the CSI300-relative target."""
+    expression = label_expression(horizon)
+    return ExcessTargetMetadata(
+        target=EXCESS_TARGET_NAME,
+        benchmark=CSI300_TS_CODE,
+        horizon_sessions=horizon,
+        label_start_offset_sessions=1,
+        label_end_offset_sessions=horizon + 1,
+        stock_label_expression=expression,
+    )
 
 
 @dataclass

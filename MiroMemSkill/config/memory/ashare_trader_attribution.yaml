@@ -1,0 +1,12 @@
+defaults:
+  - ashare_trader_mem0
+  - _self_
+
+# Hard-anchor policy is injected identically by the benchmark in both repos.
+# Disable the duplicate long skill preview so this arm differs from MiroFlow
+# only by matured structured attribution and factor reliability.
+skill_enabled: false
+skill_top_k: 0
+
+# A new experiment must explicitly provide a fresh run ID.
+namespace: "ashare_trader_attribution_${oc.env:ASHARE_TRADER_RUN_ID,???}"
