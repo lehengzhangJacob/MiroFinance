@@ -7,13 +7,14 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from omegaconf import DictConfig
 
 from src.memory.memory import Mem0Memory
 from src.memory.rank_reflection import build_rank_factor_block
 from src.memory.skills import SkillLibrary
-from src.memory.vector_store import VectorStore
+from src.memory.store_factory import create_memory_store
 
 # Benchmark task prompts share large boilerplate sections (data-usage rules,
 # output format). Cutting at these markers keys retrieval on the task-specific
@@ -54,13 +55,49 @@ def get_memory_components(cfg: DictConfig) -> tuple[Mem0Memory | None, SkillLibr
     namespace = cfg.memory.get("namespace", "default")
     skills_dir = cfg.memory.get("skills_dir", f"{store_dir}/skills")
 
-    store = VectorStore(
+    return _cached_memory_components(
         store_dir=store_dir,
         namespace=namespace,
+        backend=cfg.memory.get("backend", "mem0_qdrant"),
         embedding_model=cfg.memory.get("embedding_model", "embedding-3"),
+        embedding_dims=int(cfg.memory.get("embedding_dims", 2048)),
+        qdrant_host=cfg.memory.get("qdrant_host"),
+        qdrant_port=cfg.memory.get("qdrant_port"),
+        collection_name=cfg.memory.get("qdrant_collection"),
+        history_db_path=cfg.memory.get("history_db_path"),
+        skills_dir=skills_dir,
+        skill_enabled=bool(cfg.memory.get("skill_enabled", True)),
+    )
+
+
+@lru_cache(maxsize=32)
+def _cached_memory_components(
+    *,
+    store_dir: str,
+    namespace: str,
+    backend: str,
+    embedding_model: str,
+    embedding_dims: int,
+    qdrant_host: str | None,
+    qdrant_port: int | str | None,
+    collection_name: str | None,
+    history_db_path: str | None,
+    skills_dir: str,
+    skill_enabled: bool,
+) -> tuple[Mem0Memory, SkillLibrary | None]:
+    store = create_memory_store(
+        store_dir=store_dir,
+        namespace=namespace,
+        backend=backend,
+        embedding_model=embedding_model,
+        embedding_dims=embedding_dims,
+        qdrant_host=qdrant_host,
+        qdrant_port=int(qdrant_port) if qdrant_port is not None else None,
+        collection_name=collection_name,
+        history_db_path=history_db_path,
     )
     memory = Mem0Memory(store=store)
-    skill_lib = SkillLibrary(skills_dir=skills_dir) if cfg.memory.get("skill_enabled", True) else None
+    skill_lib = SkillLibrary(skills_dir=skills_dir) if skill_enabled else None
     return memory, skill_lib
 
 
@@ -84,6 +121,8 @@ def build_memory_context_block(
     rank_factor_min_months: int = 3,
     rank_factor_fdr_q: float = 0.10,
     rank_factor_status_enabled: bool = False,
+    trader_episode_enabled: bool = False,
+    trader_episode_max: int = 3,
 ) -> str:
     sections: list[str] = []
     query = compact_task_query(task_description)
@@ -154,6 +193,17 @@ def build_memory_context_block(
             rank_block = ""
         if rank_block:
             sections.append(rank_block)
+
+    if trader_episode_enabled and before_date:
+        try:
+            episode_block = store.trader_episode_block(
+                before_date,
+                max_episodes=trader_episode_max,
+            )
+        except Exception:
+            episode_block = ""
+        if episode_block:
+            sections.append(episode_block)
 
     memory_search_available = False
     if memory_enabled:

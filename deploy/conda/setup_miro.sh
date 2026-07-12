@@ -22,4 +22,5 @@ conda run -n Miro pip install -e "$AGENT_ROOT/MiroFlow"
 conda run -n Miro pip install -e "$AGENT_ROOT/MiroMemSkill"
 
 echo "==> Miro env ready"
-conda run -n Miro python -c "import hydra, fastmcp, openai; print('imports ok')"
+conda run -n Miro python -c \
+  "import hydra, fastmcp, mem0, openai, qdrant_client; print('imports ok')"

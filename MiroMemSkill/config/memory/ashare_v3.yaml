@@ -2,6 +2,8 @@
 # Isolated from ashare (pool-v2 memories) so this run tests the hardened
 # write/retrieve pipeline on a fresh episodic bank.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_v3"

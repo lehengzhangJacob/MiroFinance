@@ -12,6 +12,8 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from src.utils.ashare_trader import parse_portfolio_weights
+
 EVALUATION_PROMPT_SIMPLEQA = """
 Your job is to look at a question, a gold target, and a predicted answer, and then assign a grade of either ["CORRECT", "INCORRECT", "NOT_ATTEMPTED"].
 First, I will give examples of each grade, and then you will grade a new example.
@@ -526,6 +528,19 @@ async def verify_answer_for_datasets(
     """
 
     try:
+        # Portfolio quality is continuous and is evaluated offline by
+        # scripts/ashare/eval_trader.py.  Framework pass@1 only means the
+        # long-only/cash allocation is complete and obeys its hard limits.
+        if "ashare-trader" in benchmark_name and metadata:
+            parsed = parse_portfolio_weights(
+                predicted_answer,
+                metadata.get("stock_pool", []),
+                max_stock_weight=float(
+                    metadata.get("max_stock_weight", 0.25)
+                ),
+            )
+            return "CORRECT" if parsed.ok else "INCORRECT"
+
         # Handle finsearchcomp with dynamic judge prompts
         if "finsearchcomp" in benchmark_name and metadata:
             judge_prompt_template = metadata.get("judge_prompt_template", "")

@@ -854,7 +854,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
                         ),
                         rank_factor_enabled=(
                             str(self.cfg.memory.get("reflection_mode", ""))
-                            == "rank_factor"
+                            in ("rank_factor", "trader")
                         ),
                         rank_factor_min_months=int(
                             self.cfg.memory.get("rank_factor_min_months", 3)
@@ -864,6 +864,13 @@ Your objective is maximum completeness, transparency, and detailed documentation
                         ),
                         rank_factor_status_enabled=bool(
                             self.cfg.memory.get("rank_factor_status_enabled", False)
+                        ),
+                        trader_episode_enabled=(
+                            str(self.cfg.memory.get("reflection_mode", ""))
+                            == "trader"
+                        ),
+                        trader_episode_max=int(
+                            self.cfg.memory.get("trader_episode_max", 3)
                         ),
                     )
                     if memory_block:

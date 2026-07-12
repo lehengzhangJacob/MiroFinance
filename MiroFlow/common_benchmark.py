@@ -5,6 +5,7 @@
 import asyncio
 import json
 import os
+import re
 import signal
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -33,6 +34,11 @@ from src.core.pipeline import (
 )
 
 init_logging_for_benchmark_evaluation(print_task_logs=False)
+
+
+def _parse_task_month(task_id: str) -> str:
+    match = re.search(r"(\d{4})-(\d{2})-\d{2}$", task_id or "")
+    return f"{match.group(1)}-{match.group(2)}" if match else ""
 
 
 class TaskStatus(StrEnum):
@@ -389,15 +395,40 @@ class BenchmarkEvaluator(ABC):
                     result = await self.run_single_task(task)
                 return result
 
-        # Shuffle tasks to avoid order bias and improve balancing
-        shuffled_tasks = tasks.copy()
-        random.shuffle(shuffled_tasks)
-
-        # Run tasks in parallel
-        results = await asyncio.gather(
-            *[run_with_semaphore(task) for task in shuffled_tasks],
-            return_exceptions=True,
+        # Task ordering:
+        #   "shuffle" (default) avoids order bias;
+        #   "sorted"  runs chronologically without barriers;
+        #   "monthly" runs chronologically WITH a barrier between entry months.
+        task_order = str(
+            OmegaConf.select(self.cfg, "benchmark.execution.task_order") or "shuffle"
         )
+        if task_order == "monthly":
+            groups: Dict[str, List[BenchmarkTask]] = {}
+            for task in tasks:
+                groups.setdefault(_parse_task_month(task.task_id) or "unknown", []).append(task)
+            shuffled_tasks = []
+            results = []
+            for month in sorted(groups):
+                month_tasks = sorted(groups[month], key=lambda task: task.task_id)
+                print(f"\n=== month {month}: {len(month_tasks)} tasks ===")
+                shuffled_tasks.extend(month_tasks)
+                month_results = await asyncio.gather(
+                    *[run_with_semaphore(task) for task in month_tasks],
+                    return_exceptions=True,
+                )
+                results.extend(month_results)
+        else:
+            shuffled_tasks = tasks.copy()
+            if task_order == "sorted":
+                shuffled_tasks.sort(
+                    key=lambda task: (task.task_id.rsplit("_", 1)[-1], task.task_id)
+                )
+            else:
+                random.shuffle(shuffled_tasks)
+            results = await asyncio.gather(
+                *[run_with_semaphore(task) for task in shuffled_tasks],
+                return_exceptions=True,
+            )
 
         # Handle exceptions
         processed_results = []

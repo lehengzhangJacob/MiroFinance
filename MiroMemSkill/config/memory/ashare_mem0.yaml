@@ -2,6 +2,8 @@
 # before_month temporal filter). Fresh namespace: ashare_poolv4 and older
 # banks were written by the retired store/reflection implementation.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_mem0"

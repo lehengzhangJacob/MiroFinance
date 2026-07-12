@@ -4,6 +4,8 @@
 # from fixed thresholds over all matured 20-day labels, then must pass a
 # temporal holdout, cross-month consistency, lift and FDR gates.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_mem0v3"

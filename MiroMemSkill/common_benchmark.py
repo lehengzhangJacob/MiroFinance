@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 import random
 
-import dotenv
 import hydra
 import openai
 from omegaconf import DictConfig, OmegaConf
@@ -27,6 +26,12 @@ from src.memory.monthly_reflection import (
     compute_month_feature_rows,
     compute_month_features,
 )
+from src.utils.ashare_trader import (
+    cash_allocation,
+    evaluate_portfolio_month,
+    parse_portfolio_weights,
+)
+from src.utils.ashare_trader_features import compute_trader_feature_rows
 from src.logging.logger import (
     bootstrap_logger,
     task_logging_context,
@@ -39,6 +44,8 @@ from src.core.pipeline import (
 )
 
 init_logging_for_benchmark_evaluation(print_task_logs=False)
+
+_REPO_ROOT = Path(__file__).resolve().parent
 
 
 class TaskStatus(StrEnum):
@@ -593,6 +600,7 @@ class BenchmarkEvaluator(ABC):
                 log_data=log_data,
                 task_id=task.task_id,
                 ts_code=(task.metadata or {}).get("ts_code", ""),
+                available_after=(task.metadata or {}).get("exit_date", ""),
             )
             for op in ops:
                 print(f"    📝 memory {op}")
@@ -680,6 +688,9 @@ class BenchmarkEvaluator(ABC):
         if not self.cfg.memory.get("reflection_enabled", False):
             return
         reflection_mode = str(self.cfg.memory.get("reflection_mode", "per_task"))
+        if reflection_mode == "trader":
+            await self._log_trader_month(month, month_tasks, month_results)
+            return
         if reflection_mode == "rank_factor":
             await self._log_rank_factor_samples(month, month_tasks, month_results)
             return
@@ -853,6 +864,149 @@ class BenchmarkEvaluator(ABC):
         except Exception as e:
             print(f"    [rank-factor {month}] sample logging failed: {e}")
 
+    async def _log_trader_month(
+        self,
+        month: str,
+        month_tasks: List["BenchmarkTask"],
+        month_results: list,
+    ) -> None:
+        """Persist one matured-gated portfolio episode and its factor panel."""
+        trader_tasks = [
+            task
+            for task in month_tasks
+            if (task.metadata or {}).get("task_type") == "portfolio_allocation"
+        ]
+        if len(trader_tasks) != 1:
+            print(
+                f"    [trader {month}] expected one allocation task, "
+                f"got {len(trader_tasks)}"
+            )
+            return
+        task = trader_tasks[0]
+        result = next(
+            (
+                item
+                for item in month_results
+                if not isinstance(item, Exception)
+                and getattr(item, "task_id", "") == task.task_id
+            ),
+            None,
+        )
+        if result is None or not getattr(result, "attempts", None):
+            print(f"    [trader {month}] no completed result")
+            return
+        judged = next(
+            (
+                attempt
+                for attempt in result.attempts
+                if attempt.get("judge_result") in ("CORRECT", "INCORRECT")
+            ),
+            None,
+        )
+        if judged is None:
+            print(f"    [trader {month}] no judged attempt")
+            return
+
+        metadata = task.metadata or {}
+        pool = list(metadata.get("stock_pool", []))
+        stock_returns = metadata.get("stock_returns", {})
+        excess_returns = metadata.get("excess_returns", {})
+        entry_date = str(metadata.get("entry_date", ""))
+        exit_date = str(metadata.get("exit_date", ""))
+        stock_info = metadata.get("stock_info", {})
+        if (
+            not pool
+            or not stock_returns
+            or not excess_returns
+            or not entry_date
+            or not exit_date
+            or not stock_info
+        ):
+            print(f"    [trader {month}] incomplete task metadata")
+            return
+
+        answer = str(judged.get("model_boxed_answer", "") or "")
+        parsed = parse_portfolio_weights(
+            answer,
+            pool,
+            max_stock_weight=float(metadata.get("max_stock_weight", 0.25)),
+        )
+        allocation = parsed if parsed.ok else cash_allocation(pool)
+        episode_notional = float(
+            self.cfg.memory.get("trader_episode_notional", 1_000_000.0)
+        )
+        portfolio_result = evaluate_portfolio_month(
+            allocation.weights,
+            allocation.cash,
+            stock_returns,
+            float(metadata.get("index_return", 0.0)),
+            starting_capital=episode_notional,
+            excess_returns=excess_returns,
+            open_cost=float(metadata.get("open_cost", 0.0005)),
+            close_cost=float(metadata.get("close_cost", 0.0015)),
+            min_cost=float(metadata.get("min_cost", 5.0)),
+        )
+
+        try:
+            memory, _ = get_memory_components(self.cfg)
+        except Exception as exc:
+            print(f"    Memory unavailable for trader logging: {exc}")
+            return
+        if not memory:
+            return
+
+        try:
+            operation = memory.add_trader_episode(
+                task_id=task.task_id,
+                month=month,
+                available_after=exit_date,
+                weights=allocation.weights,
+                cash=allocation.cash,
+                gross_return=portfolio_result.gross_return,
+                net_return=portfolio_result.net_return,
+                index_return=portfolio_result.index_return,
+                active_return=portfolio_result.active_return,
+                total_cost=portfolio_result.total_cost,
+                contributions=portfolio_result.contributions,
+                reasoning=str(judged.get("model_response", "") or answer),
+                parse_ok=parsed.ok,
+            )
+            print(f"    trader[{month}] {operation}")
+        except Exception as exc:
+            print(f"    [trader {month}] episode logging failed: {exc}")
+
+        configured_data_dir = Path(str(self.cfg.get("data_dir", "data")))
+        if not configured_data_dir.is_absolute():
+            configured_data_dir = _REPO_ROOT / configured_data_dir
+        ashare_data_dir = configured_data_dir / "ashare"
+        try:
+            feature_rows = compute_trader_feature_rows(
+                entry_date,
+                stock_info,
+                data_dir=ashare_data_dir,
+                lookback_days=250,
+            )
+            samples = [
+                {
+                    "task_id": f"{task.task_id}_{row['ts_code']}",
+                    "record_type": "trader_factor_sample",
+                    "entry_month": month,
+                    "entry_date": entry_date,
+                    "exit_date": exit_date,
+                    "excess_return": excess_returns[row["ts_code"]],
+                    **row,
+                }
+                for row in feature_rows
+                if row["ts_code"] in excess_returns
+            ]
+            added, updated = memory.log_samples(samples)
+            print(
+                f"    trader-factor[{month}] samples upserted: "
+                f"added={added}, updated={updated}, month_rows={len(samples)}"
+            )
+        except Exception as exc:
+            print(f"    [trader {month}] factor sample logging failed: {exc}")
+
     async def _run_monthly_reflection(
         self,
         month: str,
@@ -878,6 +1032,7 @@ class BenchmarkEvaluator(ABC):
         tasks_by_id = {t.task_id: t for t in month_tasks}
         stocks: list[dict] = []
         entry_date = ""
+        available_after = ""
         for result in month_results:
             if isinstance(result, Exception) or not getattr(result, "attempts", None):
                 continue
@@ -892,6 +1047,10 @@ class BenchmarkEvaluator(ABC):
                 continue
             meta = task.metadata or {}
             entry_date = meta.get("entry_date", entry_date)
+            available_after = max(
+                available_after,
+                str(meta.get("exit_date", "") or ""),
+            )
             predicted = extract_direction(judged.get("model_boxed_answer", ""))
             stocks.append(
                 {
@@ -926,7 +1085,12 @@ class BenchmarkEvaluator(ABC):
             return
 
         try:
-            ops = memory.add_monthly(month, features_csv, n)
+            ops = memory.add_monthly(
+                month,
+                features_csv,
+                n,
+                available_after=available_after,
+            )
             if ops:
                 for op in ops:
                     print(f"    📅 monthly[{month}] {op}")

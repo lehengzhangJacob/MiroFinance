@@ -3,12 +3,14 @@
 tushare_token
 .env
 .env.*
+!MiroMemSkill/.env.template
 
 # Conda exported requirements (regenerate via deploy/conda/setup_*.sh)
 deploy/conda/requirements-*.txt
 
 # Runtime logs (nohup pool3, hermes evolve, etc.)
 deploy/logs/
+logs/
 
 # Course archives (local reference only)
 *.7z
@@ -17,6 +19,10 @@ deploy/logs/
 MiroMemSkill/memory_bank/*.jsonl
 MiroMemSkill/memory_bank/*.bak*
 MiroMemSkill/memory_bank/*.lock
+MiroMemSkill/memory_bank/*.db
+MiroMemSkill/memory_bank/*.db-*
+MiroMemSkill/.memory_archives/
+MiroMemSkill/.runtime/
 MiroMemSkill/logs/
 
 # Packaged-skill run artifacts (qlib_skill outputs etc.)

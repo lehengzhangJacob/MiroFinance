@@ -2,6 +2,8 @@
 # (counter-lesson reflection, stance-balanced retrieval, neutral framing).
 # Fresh namespace so results are comparable against the collapsed ashare_v3 bank.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_v4"

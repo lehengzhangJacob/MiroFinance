@@ -1,5 +1,7 @@
 # Deterministic ablation: procedural skills without memory or calibration.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_skill_only"

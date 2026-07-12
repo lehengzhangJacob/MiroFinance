@@ -4,6 +4,8 @@
 # rule exists, a local-neighbour signal is only exposed if its Wilson interval
 # excludes 50%; inconclusive label counts are withheld from the prompt.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_mem0v4"

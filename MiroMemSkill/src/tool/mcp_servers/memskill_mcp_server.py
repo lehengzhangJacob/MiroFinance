@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 from src.logging.logger import setup_mcp_logging
 from src.memory.memory import Mem0Memory
 from src.memory.skills import SkillLibrary
-from src.memory.vector_store import VectorStore
+from src.memory.store_factory import create_memory_store
 
 setup_mcp_logging(tool_name=os.path.basename(__file__))
 mcp = FastMCP("memskill-mcp-server")
@@ -19,6 +19,7 @@ mcp = FastMCP("memskill-mcp-server")
 _STORE_DIR = os.environ.get("MEMSKILL_STORE_DIR", "memory_bank")
 _NAMESPACE = os.environ.get("MEMSKILL_NAMESPACE", "default")
 _SKILLS_DIR = os.environ.get("MEMSKILL_SKILLS_DIR", f"{_STORE_DIR}/skills")
+_BACKEND = os.environ.get("MEMSKILL_MEMORY_BACKEND", "mem0_qdrant")
 _ALLOW_SAVE = os.environ.get("MEMSKILL_ALLOW_SAVE", "true").lower() in {
     "1", "true", "yes", "on"
 }
@@ -30,7 +31,19 @@ _skills: SkillLibrary | None = None
 def _get_memory() -> Mem0Memory:
     global _memory
     if _memory is None:
-        _memory = Mem0Memory(store=VectorStore(store_dir=_STORE_DIR, namespace=_NAMESPACE))
+        qdrant_port = os.environ.get("MEM0_QDRANT_PORT")
+        store = create_memory_store(
+            store_dir=_STORE_DIR,
+            namespace=_NAMESPACE,
+            backend=_BACKEND,
+            embedding_model=os.environ.get("MEM0_EMBEDDING_MODEL", "embedding-3"),
+            embedding_dims=int(os.environ.get("MEM0_EMBEDDING_DIMS", "2048")),
+            qdrant_host=os.environ.get("MEM0_QDRANT_HOST"),
+            qdrant_port=int(qdrant_port) if qdrant_port else None,
+            collection_name=os.environ.get("MEM0_QDRANT_COLLECTION"),
+            history_db_path=os.environ.get("MEM0_HISTORY_DB_PATH"),
+        )
+        _memory = Mem0Memory(store=store)
     return _memory
 
 
@@ -61,6 +74,11 @@ def memory_search(
             actual exit date.
     """
     try:
+        if _NAMESPACE.startswith("ashare") and not (before_date or before_month):
+            return (
+                "Memory search unavailable: A-share namespaces require "
+                "before_date or before_month for point-in-time safety."
+            )
         memory = _get_memory()
         results = memory.search(
             query,

@@ -15,7 +15,7 @@ dependencies = [
     "markitdown-mcp>=0.0.1a3",
     "mcp>=1.12.2",
     "mutagen>=1.47.0",
-    "openai==1.78.1",
+    "openai>=1.90.0",
     "rich>=14.1.0",
     "wikipedia>=1.4.0",
     "openpyxl>=3.1.5",
@@ -29,8 +29,11 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "requests>=2.32.4",
     "filetype>=1.2.0",
-    "Pillow",
-    "pyzmq"
+    "pillow<12",
+    "pyzmq",
+    "mem0ai>=2.0.11",
+    "qdrant-client>=1.18.0",
+    "httpx[socks]>=0.28.1",
 ]
 
 [build-system]

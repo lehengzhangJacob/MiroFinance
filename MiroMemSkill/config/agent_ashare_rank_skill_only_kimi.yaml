@@ -33,7 +33,7 @@ main_agent:
 
   tool_config:
     - tool-ashare
-    - tool-memskill-ashare-mem0v3
+    - tool-memskill-ashare-skill-only
   tool_blacklist:
     - ["tool-ashare", "ashare_stock_info"]
     - ["tool-ashare", "ashare_price_history"]

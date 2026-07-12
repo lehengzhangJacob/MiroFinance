@@ -1,6 +1,8 @@
 # Memory & skill config for pool-v3 rerun with packaged tushare + qlib skills.
 # Same direction-collapse fixes as v4; fresh ashare_v5 namespace.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_v5"

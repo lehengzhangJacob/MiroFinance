@@ -1,5 +1,7 @@
 # Ranking memory: learn factor reliability from matured monthly cross-sections.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_rank_mem0"

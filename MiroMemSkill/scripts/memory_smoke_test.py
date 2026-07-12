@@ -683,6 +683,136 @@ def test_feature_conditioned_evidence() -> None:
         print("[OK] post-tool feature evidence is point-in-time and withholds noisy majorities")
 
 
+def test_official_mem0_qdrant_integration() -> None:
+    """Opt-in live integration test; requires Qdrant and a real GLM key."""
+    if os.environ.get("MEM0_QDRANT_INTEGRATION", "").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        print("[SKIP] official Mem0/Qdrant integration (set MEM0_QDRANT_INTEGRATION=1)")
+        return
+    if os.environ.get("GLM_API_KEY") in {"", "smoke-test-key", None}:
+        raise RuntimeError("MEM0_QDRANT_INTEGRATION requires a real GLM_API_KEY")
+
+    from src.memory.official_mem0_store import OfficialMem0Store
+    from src.memory.rolling_reflection import ValidatedRule
+
+    left = OfficialMem0Store(store_dir=ROOT / "memory_bank", namespace="__qdrant_smoke_left__")
+    right = OfficialMem0Store(store_dir=ROOT / "memory_bank", namespace="__qdrant_smoke_right__")
+    left.reset_namespace()
+    right.reset_namespace()
+    try:
+        old = left.add(
+            "已到期规则：相对动量证据必须结合估值确认。",
+            metadata={
+                "source": "rolling_statistical",
+                "rule_id": "old",
+                "entry_month": "2024-07",
+                "available_after": "20240729",
+                "functional_stance": "neutral",
+                "q_value": 0.05,
+                "validation_lift": 0.2,
+                "validation_support": 10,
+            },
+        )
+        left.add(
+            "未来规则：在到期日前绝不能被检索。",
+            metadata={
+                "source": "rolling_statistical",
+                "rule_id": "future",
+                "entry_month": "2024-09",
+                "available_after": "20240929",
+                "functional_stance": "neutral",
+                "q_value": 0.01,
+                "validation_lift": 0.3,
+                "validation_support": 10,
+            },
+        )
+        assert left.count() == 2
+        assert right.count() == 0
+        assert right.get(old.id) is None
+        updated = left.update(
+            old.id,
+            old.content,
+            metadata_patch={"audit_revision": 2},
+        )
+        assert updated and updated.metadata["audit_revision"] == 2
+        assert {"ADD", "UPDATE"}.issubset(
+            {item.get("event") for item in left.history(old.id)}
+        )
+
+        memory = Mem0Memory(left)
+        visible = memory.search(
+            "条件规则",
+            top_k=5,
+            before_month="2024-08",
+            before_date="20240801",
+        )
+        assert [record.metadata.get("rule_id") for record, _ in visible] == ["old"]
+
+        if os.environ.get("MEM0_QDRANT_INFERENCE_TEST", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }:
+            inferred_memory = Mem0Memory(right)
+            inferred_ops = inferred_memory.add(
+                question=(
+                    "预测某股票未来20日相对沪深300表现；"
+                    "证据为相对动量为正但估值处于高位。"
+                ),
+                answer="依据不足，最终判断：跑赢",
+                judge_result="INCORRECT",
+                task_id="ashare_test_2024-07-01",
+                ts_code="000001.SZ",
+                available_after="20240729",
+            )
+            inferred_records = right.all_records()
+            assert inferred_ops and inferred_records
+            assert all(
+                record.metadata.get("available_after")
+                == "2024-07-29T00:00:00Z"
+                for record in inferred_records
+            )
+
+        metadata = {
+            "rule_id": "stable",
+            "condition": {"feature": "rel20", "operator": ">", "threshold": 2.0},
+            "direction": OUTPERFORM,
+            "entry_month": "2024-07",
+            "available_after": "20240729",
+            "generated_for_date": "20240801",
+            "source": "rolling_statistical",
+            "source_months": ["2024-07"],
+            "source_tasks": [],
+            "functional_stance": "neutral",
+            "tags": ["rolling", "validated", "rel20"],
+            "train_support": 20,
+            "train_accuracy": 0.7,
+            "validation_support": 10,
+            "validation_accuracy": 0.7,
+            "validation_lift": 0.2,
+            "q_value": 0.05,
+            "total_support": 30,
+            "total_accuracy": 0.7,
+            "support_months": 3,
+        }
+        rule = ValidatedRule(
+            "stable",
+            "当近20日相对收益大于2%时，历史验证更常跑赢，仅作辅助。",
+            metadata,
+        )
+        assert memory._sync_rolling_rules([rule], "20240801")
+        assert memory._sync_rolling_rules([rule], "20240802") == [
+            "UNCHANGED: 1 validated rolling rules"
+        ]
+        print("[OK] official Mem0/Qdrant CRUD, namespace, date filter, rolling idempotency")
+    finally:
+        left.reset_namespace()
+        right.reset_namespace()
+
+
 if __name__ == "__main__":
     VectorStore.embed = fake_embed  # offline: deterministic embeddings
     test_vector_store_crud_and_history()
@@ -702,4 +832,5 @@ if __name__ == "__main__":
     test_context_block_with_calibration()
     test_direction_free_reliability_and_tool_filter()
     test_feature_conditioned_evidence()
+    test_official_mem0_qdrant_integration()
     print("\n=== All memory smoke tests passed ===")

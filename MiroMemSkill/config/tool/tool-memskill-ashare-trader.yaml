@@ -1,0 +1,22 @@
+name: "tool-memskill"
+tool_command: "python"
+args:
+  - "-m"
+  - "src.tool.mcp_servers.memskill_mcp_server"
+env:
+  MEMSKILL_STORE_DIR: "memory_bank"
+  MEMSKILL_NAMESPACE: "ashare_trader_${oc.env:ASHARE_TRADER_RUN_ID}"
+  MEMSKILL_SKILLS_DIR: "memory_bank/skills_ashare"
+  MEMSKILL_MEMORY_BACKEND: "mem0_qdrant"
+  MEMSKILL_ALLOW_SAVE: "false"
+  MEM0_QDRANT_HOST: "${oc.env:MEM0_QDRANT_HOST,127.0.0.1}"
+  MEM0_QDRANT_PORT: "${oc.env:MEM0_QDRANT_PORT,6333}"
+  MEM0_QDRANT_COLLECTION: "${oc.env:MEM0_QDRANT_COLLECTION,miromemskill}"
+  MEM0_HISTORY_DB_PATH: "${oc.env:MEM0_HISTORY_DB_PATH,memory_bank/mem0_history.db}"
+  MEM0_EMBEDDING_MODEL: "${oc.env:MEM0_EMBEDDING_MODEL,embedding-3}"
+  MEM0_EMBEDDING_DIMS: "${oc.env:MEM0_EMBEDDING_DIMS,2048}"
+  GLM_API_KEY: '${oc.env:GLM_API_KEY,""}'
+  GLM_BASE_URL: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  DEEPSEEK_API_KEY: '${oc.env:DEEPSEEK_API_KEY,""}'
+  DEEPSEEK_BASE_URL: "${oc.env:DEEPSEEK_BASE_URL,https://api.deepseek.com/v1}"
+  DEEPSEEK_MODEL_NAME: "${oc.env:DEEPSEEK_MODEL_NAME,deepseek-chat}"

@@ -2,16 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mem0-style memory facade plus statistically validated rolling reflection.
+"""Domain memory facade over official Mem0 plus statistical reflection.
 
-Pipeline per finished task (cf. mem0ai/mem0, arXiv:2504.19413):
-  1. Extraction phase: one LLM call distills 0-2 atomic conditional lessons
-     from the task trajectory + judge result. Strict JSON; unparseable output
-     is retried once, then DISCARDED — raw LLM text is never stored.
-  2. Update phase: each candidate is compared against the top-5 most similar
-     existing memories; an LLM decides ADD / UPDATE (merge) / DELETE
-     (contradicted) / NONE (duplicate). Every operation lands in the
-     namespace's history JSONL.
+Production uses ``mem0ai.Memory`` for extraction, consolidation, vector CRUD,
+and SQLite history. The legacy JSONL path remains available only for isolated
+tests and historical compatibility.
 
 Retrieval applies metadata filters:
   - before_date: labels become visible only on/after their actual exit date;
@@ -31,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import date
 from collections import Counter
 from typing import Any, Mapping, Optional, Sequence
 
@@ -51,7 +47,7 @@ from src.memory.rolling_reflection import (
     normalize_date,
     normalize_month,
 )
-from src.memory.vector_store import MemoryRecord, VectorStore
+from src.memory.vector_store import MemoryRecord
 from src.utils.env_loader import load_project_env
 
 # Below this similarity the update phase is skipped and the candidate is
@@ -75,6 +71,17 @@ def extract_direction(answer: str) -> str:
         return "跑输"
     m = re.search(r"\\boxed\{(跑赢|跑输)\}", text)
     return m.group(1) if m else ""
+
+
+def month_available_after(month: str) -> str:
+    """First calendar day after YYYY-MM, used for month-scoped notes."""
+    normalized = normalize_month(month)
+    if not normalized:
+        return ""
+    year, month_number = (int(part) for part in normalized.split("-"))
+    if month_number == 12:
+        return date(year + 1, 1, 1).strftime("%Y%m%d")
+    return date(year, month_number + 1, 1).strftime("%Y%m%d")
 
 
 def functional_stance(predicted_direction: str, judge_result: str) -> str:
@@ -116,11 +123,11 @@ def summarize_trajectory(log_data: dict[str, Any], max_chars: int = 3000) -> str
 
 
 class Mem0Memory:
-    """Two-phase memory over a VectorStore, plus stance/temporal-filtered search."""
+    """Domain facade over official Mem0, with a legacy test-store fallback."""
 
     def __init__(
         self,
-        store: VectorStore,
+        store: Any,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -215,8 +222,50 @@ class Mem0Memory:
         log_data: Optional[dict[str, Any]] = None,
         task_id: str = "",
         ts_code: str = "",
+        available_after: str = "",
     ) -> list[str]:
         """Extraction phase -> update phase. Returns human-readable op summaries."""
+        predicted = extract_direction(answer)
+        entry_month = parse_task_month(task_id)
+        stance = functional_stance(predicted, judge_result)
+        metadata = {
+            "task_id": task_id,
+            "ts_code": ts_code,
+            "entry_month": entry_month,
+            "available_after": available_after,
+            "judge_result": judge_result,
+            "predicted_direction": predicted,
+            "functional_stance": stance,
+            "source": "reflection",
+            "source_tasks": [task_id],
+        }
+
+        if getattr(self.store, "is_official_mem0", False):
+            trajectory = summarize_trajectory(log_data or {}) or "N/A"
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Task:\n{question[:1200]}\n\n"
+                        f"Tool trajectory:\n{trajectory[:4000]}"
+                    ),
+                },
+                {"role": "assistant", "content": (answer or "N/A")[:1200]},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Evaluation: {judge_result}. Extract only a reusable "
+                        "conditional lesson; do not store the final direction."
+                    ),
+                },
+            ]
+            results = self.store.add_inferred(messages, metadata=metadata)
+            return [
+                f"{str(item.get('event', 'MEM0')).upper()}: "
+                f"{str(item.get('memory', ''))[:60]}"
+                for item in results
+            ]
+
         if not self.api_key:
             return []
 
@@ -242,9 +291,6 @@ class Mem0Memory:
         # a mechanical amplifier of the bank's direction bias.
         max_lessons = 1
 
-        predicted = extract_direction(answer)
-        entry_month = parse_task_month(task_id)
-        stance = functional_stance(predicted, judge_result)
         ops: list[str] = []
 
         for lesson in lessons[:max_lessons]:
@@ -254,10 +300,11 @@ class Mem0Memory:
             if len(content) < 20:  # degenerate/empty extraction
                 continue
             tags = [str(t) for t in lesson.get("tags", []) if str(t).strip()]
-            metadata = {
+            lesson_metadata = {
                 "task_id": task_id,
                 "ts_code": ts_code,
                 "entry_month": entry_month,
+                "available_after": available_after,
                 "judge_result": judge_result,
                 "predicted_direction": predicted,
                 "functional_stance": stance,
@@ -265,7 +312,7 @@ class Mem0Memory:
                 "source": "reflection",
                 "source_tasks": [task_id],
             }
-            op = self._consolidate(content, metadata, task_id)
+            op = self._consolidate(content, lesson_metadata, task_id)
             if op:
                 ops.append(op)
         return ops
@@ -352,14 +399,47 @@ class Mem0Memory:
             merged["available_after"] = max(availability)
         return merged
 
-    def add_monthly(self, month: str, features_table: str, n_stocks: int) -> list[str]:
+    def add_monthly(
+        self,
+        month: str,
+        features_table: str,
+        n_stocks: int,
+        available_after: str = "",
+    ) -> list[str]:
         """Monthly cross-sectional reflection (v2 learning signal).
 
         One LLM call over the month's full decision-time feature table plus
         realized labels distills at most 2 patterns backed by n=16 evidence,
-        replacing the noise-fitted n=1 per-task lessons. Candidates still run
-        through the Mem0 consolidation phase.
+        replacing the noise-fitted n=1 per-task lessons. Production delegates
+        extraction and consolidation to official Mem0.
         """
+        monthly_metadata = {
+            "task_id": f"monthly_{month}",
+            "entry_month": month,
+            "available_after": available_after,
+            "judge_result": "MONTHLY",
+            "predicted_direction": "",
+            "functional_stance": "neutral",
+            "source": "monthly_reflection",
+            "source_tasks": [f"monthly_{month}"],
+        }
+        if getattr(self.store, "is_official_mem0", False):
+            results = self.store.add_inferred(
+                (
+                    f"Month {month} contains {n_stocks} settled A-share "
+                    "point-in-time predictions. Extract at most one reusable "
+                    "cross-sectional conditional lesson from this table. Do "
+                    "not store unconditional direction counts.\n\n"
+                    f"{features_table}"
+                ),
+                metadata=monthly_metadata,
+            )
+            return [
+                f"{str(item.get('event', 'MEM0')).upper()}: "
+                f"{str(item.get('memory', ''))[:60]}"
+                for item in results
+            ]
+
         if not self.api_key:
             return []
         # Reasoning models (deepseek-v4-pro) burn completion tokens on hidden
@@ -388,6 +468,7 @@ class Mem0Memory:
             metadata = {
                 "task_id": f"monthly_{month}",
                 "entry_month": month,
+                "available_after": available_after,
                 "judge_result": "MONTHLY",
                 "predicted_direction": "",
                 # Cross-sectional conditionals are two-sided by construction;
@@ -401,6 +482,193 @@ class Mem0Memory:
             if op:
                 ops.append(op)
         return ops
+
+    # --------------------------------------------- unified trader episodes
+
+    def add_trader_episode(
+        self,
+        *,
+        task_id: str,
+        month: str,
+        available_after: str,
+        weights: Mapping[str, float],
+        cash: float,
+        gross_return: float,
+        net_return: float,
+        index_return: float,
+        active_return: float,
+        total_cost: float,
+        contributions: Mapping[str, float],
+        reasoning: str = "",
+        parse_ok: bool = True,
+    ) -> str:
+        """Idempotently store one factual portfolio episode in Mem0.
+
+        The episode is written with ``infer=False`` through the store adapter:
+        portfolio weights and realized P&L must not be rewritten by an LLM.
+        Visibility is still gated by the exact liquidation date.
+        """
+        entry_month = normalize_month(month or parse_task_month(task_id))
+        availability = normalize_date(available_after)
+        if not task_id or not entry_month or not availability:
+            raise ValueError("trader episode requires task_id, month, and exit date")
+
+        positions = sorted(
+            (
+                (str(code), float(weight))
+                for code, weight in weights.items()
+                if float(weight) > 1e-9
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        ranked_contributions = sorted(
+            (
+                (str(code), float(value))
+                for code, value in contributions.items()
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        allocation_text = (
+            ", ".join(f"{code}={weight:.1%}" for code, weight in positions)
+            if positions
+            else "无股票仓位"
+        )
+        best = ", ".join(
+            f"{code}={value:+.2%}" for code, value in ranked_contributions[:2]
+        ) or "无"
+        worst = ", ".join(
+            f"{code}={value:+.2%}" for code, value in ranked_contributions[-2:]
+        ) or "无"
+        compact_reasoning = re.sub(r"\s+", " ", reasoning or "").strip()[:800]
+        content_lines = [
+            f"交易月份 {entry_month}（任务 {task_id}，{availability} 后可见）。",
+            f"仓位：{allocation_text}；CASH={float(cash):.1%}。",
+            (
+                f"实现收益：毛收益 {float(gross_return):+.2%}，"
+                f"扣费后 {float(net_return):+.2%}，沪深300 {float(index_return):+.2%}，"
+                f"主动收益 {float(active_return):+.2%}，"
+                f"按100万元名义交易费 ¥{float(total_cost):.2f}。"
+            ),
+            f"股票净贡献较大：{best}；较弱：{worst}。",
+            (
+                "输出格式合法。"
+                if parse_ok
+                else "原始输出不合法，本月按全现金回退执行。"
+            ),
+        ]
+        if compact_reasoning:
+            content_lines.append(f"当时的点时理由：{compact_reasoning}")
+        content = "\n".join(content_lines)
+        metadata = {
+            "task_id": task_id,
+            "entry_month": entry_month,
+            "available_after": availability,
+            "judge_result": "PORTFOLIO_VALID" if parse_ok else "PORTFOLIO_INVALID",
+            "functional_stance": "neutral",
+            "source": "trader_episode",
+            "source_tasks": [task_id],
+            "net_return": round(float(net_return), 10),
+            "index_return": round(float(index_return), 10),
+            "active_return": round(float(active_return), 10),
+            "cash_weight": round(float(cash), 10),
+            "total_cost": round(float(total_cost), 6),
+        }
+
+        matching = [
+            record
+            for record in self.store.all_records()
+            if record.metadata.get("source") == "trader_episode"
+            and str(record.metadata.get("task_id", "")) == task_id
+        ]
+        primary = matching[0] if matching else None
+        for duplicate in matching[1:]:
+            self.store.delete(
+                duplicate.id,
+                source_task=task_id,
+                reason="duplicate trader episode task id",
+            )
+
+        if primary is None:
+            record = self.store.add(
+                content,
+                metadata=metadata,
+                source_task=task_id,
+            )
+            return f"ADD trader episode {record.id[:8]}: {entry_month}"
+
+        same_metadata = self._comparable_rule_metadata(
+            primary.metadata
+        ) == self._comparable_rule_metadata(metadata)
+        if primary.content == content and same_metadata:
+            return f"UNCHANGED trader episode {primary.id[:8]}: {entry_month}"
+        self.store.update(
+            primary.id,
+            content,
+            metadata_patch=metadata,
+            source_task=task_id,
+        )
+        return f"UPDATE trader episode {primary.id[:8]}: {entry_month}"
+
+    def trader_episode_block(
+        self,
+        before_date: str,
+        *,
+        max_episodes: int = 3,
+    ) -> str:
+        """Format only factual trader episodes matured by ``before_date``."""
+        cutoff = normalize_date(before_date)
+        if not cutoff or max_episodes <= 0:
+            return ""
+        visible = []
+        for record in self.store.all_records():
+            if record.metadata.get("source") != "trader_episode":
+                continue
+            available_after = normalize_date(
+                record.metadata.get("available_after")
+            )
+            # Fail closed: a portfolio outcome without an exact liquidation
+            # date is never injected into a point-in-time task.
+            if available_after and available_after <= cutoff:
+                visible.append(record)
+        if not visible:
+            return ""
+        visible.sort(
+            key=lambda record: (
+                normalize_month(record.metadata.get("entry_month")),
+                str(record.metadata.get("task_id", "")),
+            )
+        )
+
+        portfolio_nav = 1.0
+        benchmark_nav = 1.0
+        active_wins = 0
+        for record in visible:
+            try:
+                net = float(record.metadata.get("net_return", 0.0))
+                index = float(record.metadata.get("index_return", 0.0))
+                active = float(record.metadata.get("active_return", net - index))
+            except (TypeError, ValueError):
+                continue
+            portfolio_nav *= 1.0 + net
+            benchmark_nav *= 1.0 + index
+            active_wins += active > 0
+
+        recent = visible[-max_episodes:]
+        lines = [
+            (
+                "### 已到期的个人交易日志（严格 walk-forward）\n"
+                f"截至 {cutoff} 共有 {len(visible)} 个可见交易窗口；"
+                f"组合累计 {portfolio_nav - 1:+.2%}，沪深300同期累计 "
+                f"{benchmark_nav - 1:+.2%}，跑赢窗口 {active_wins}/{len(visible)}。"
+            ),
+            (
+                "这些是对过去决策的事实审计，不是当前股票的收益标签。"
+                "只用来校准仓位、风险和证据权重，当前决策仍须以当前点时面板为准。"
+            ),
+        ]
+        for record in recent:
+            lines.append("- " + record.content[:1200].replace("\n", " "))
+        return "\n".join(lines)
 
     # -------------------------------------------- rolling statistical reflection
 
@@ -472,7 +740,16 @@ class Mem0Memory:
     def _comparable_rule_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
         # generated_for_date is audit context, not evidence.  If no label has
         # newly matured, advancing to another decision date must be a no-op.
-        return {k: v for k, v in metadata.items() if k != "generated_for_date"}
+        comparable = {
+            k: v
+            for k, v in metadata.items()
+            if k not in {"generated_for_date", "source_task"}
+        }
+        if "available_after" in comparable:
+            comparable["available_after"] = normalize_date(
+                comparable["available_after"]
+            )
+        return comparable
 
     def _sync_rolling_rules(
         self, rules: Sequence[ValidatedRule], as_of_date: str
@@ -584,6 +861,7 @@ class Mem0Memory:
                 "source": "agent_note",
                 "tags": tags,
                 "entry_month": as_of_month,
+                "available_after": month_available_after(as_of_month),
                 "functional_stance": "neutral",
             },
         )
@@ -764,6 +1042,12 @@ class Mem0Memory:
         """Whether a temporally visible validated/vector memory exists."""
         month_cutoff = normalize_month(before_month or before_date)
         date_cutoff = normalize_date(before_date)
+        if getattr(self.store, "is_official_mem0", False):
+            filters = self._native_visibility_filters(month_cutoff, date_cutoff)
+            if filters is None:
+                return bool(self.store.all_records())
+            return bool(self.store.all_records(filters=filters))
+
         for record in self.store.all_records():
             available_after = normalize_date(record.metadata.get("available_after"))
             if date_cutoff and available_after:
@@ -778,6 +1062,27 @@ class Mem0Memory:
         return False
 
     # ------------------------------------------------------------ search path
+
+    @staticmethod
+    def _native_visibility_filters(
+        month_cutoff: str,
+        date_cutoff: str,
+    ) -> dict[str, Any] | None:
+        """Qdrant filter for the fresh-store invariant: every memory has an
+        ISO ``available_after`` payload. Missing availability stays hidden."""
+        if date_cutoff:
+            iso = (
+                f"{date_cutoff[:4]}-{date_cutoff[4:6]}-"
+                f"{date_cutoff[6:8]}T00:00:00Z"
+            )
+            return {"available_after": {"lte": iso}}
+        if month_cutoff:
+            return {
+                "available_after": {
+                    "lt": f"{month_cutoff[:4]}-{month_cutoff[5:7]}-01T00:00:00Z"
+                }
+            }
+        return None
 
     def search(
         self,
@@ -808,13 +1113,26 @@ class Mem0Memory:
         # Validated rolling rules are few (max three) and their relevance is
         # condition-based, not semantic.  Pin them ahead of vector matches so
         # a generic stock-name embedding cannot hide the statistical rules.
-        all_records = self.store.all_records()
+        native_filters = (
+            self._native_visibility_filters(month_cutoff, date_cutoff)
+            if getattr(self.store, "is_official_mem0", False)
+            else None
+        )
+        all_records = (
+            self.store.all_records(filters=native_filters)
+            if native_filters is not None
+            else self.store.all_records()
+        )
         if not all_records:
             return []
         rolling = [
             rec
             for rec in all_records
-            if rec.metadata.get("source") == "rolling_statistical" and predicate(rec)
+            if rec.metadata.get("source") == "rolling_statistical"
+            and (
+                getattr(self.store, "is_official_mem0", False)
+                or predicate(rec)
+            )
         ]
         rolling.sort(
             key=lambda rec: (
@@ -832,9 +1150,16 @@ class Mem0Memory:
             return picked[:top_k]
 
         try:
-            wide = self.store.search(
-                query=query, top_k=top_k * 4, predicate=predicate, min_score=0.05
-            )
+            search_kwargs: dict[str, Any] = {
+                "query": query,
+                "top_k": top_k * 4,
+                "min_score": 0.05,
+            }
+            if getattr(self.store, "is_official_mem0", False):
+                search_kwargs["filters"] = native_filters
+            else:
+                search_kwargs["predicate"] = predicate
+            wide = self.store.search(**search_kwargs)
         except Exception as exc:
             print(f"    memory search failed (no injection): {exc}")
             return picked

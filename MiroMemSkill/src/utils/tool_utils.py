@@ -9,6 +9,7 @@ from mcp import StdioServerParameters
 from omegaconf import DictConfig, OmegaConf
 
 from src.logging.logger import bootstrap_logger
+from src.utils.env_loader import load_project_env
 from config.agent_prompts.base_agent_prompt import BaseAgentPrompt
 
 import os
@@ -17,11 +18,78 @@ LOGGER_LEVEL = os.getenv("LOGGER_LEVEL", "INFO")
 logger = bootstrap_logger(level=LOGGER_LEVEL)
 
 
+def _resolved_tool_env(tool_cfg: DictConfig, cfg: DictConfig) -> dict[str, str]:
+    env = {
+        str(key): str(value)
+        for key, value in tool_cfg.get("env", {}).items()
+    }
+    if tool_cfg.get("name") != "tool-memskill":
+        return env
+
+    memory_cfg = cfg.get("memory", {})
+    # Hydra is the source of truth for the namespace and backend. This prevents
+    # passive injection and the MCP process from silently addressing different
+    # user_id scopes in the shared Mem0 collection.
+    env["MEMSKILL_NAMESPACE"] = str(
+        memory_cfg.get("namespace", env.get("MEMSKILL_NAMESPACE", "default"))
+    )
+    env["MEMSKILL_STORE_DIR"] = str(
+        memory_cfg.get("store_dir", env.get("MEMSKILL_STORE_DIR", "memory_bank"))
+    )
+    env["MEMSKILL_SKILLS_DIR"] = str(
+        memory_cfg.get(
+            "skills_dir",
+            env.get("MEMSKILL_SKILLS_DIR", "memory_bank/skills"),
+        )
+    )
+    env["MEMSKILL_MEMORY_BACKEND"] = str(
+        memory_cfg.get("backend", "mem0_qdrant")
+    )
+    env["MEM0_QDRANT_HOST"] = str(
+        memory_cfg.get(
+            "qdrant_host",
+            os.getenv("MEM0_QDRANT_HOST", "127.0.0.1"),
+        )
+    )
+    env["MEM0_QDRANT_PORT"] = str(
+        memory_cfg.get("qdrant_port", os.getenv("MEM0_QDRANT_PORT", "6333"))
+    )
+    env["MEM0_QDRANT_COLLECTION"] = str(
+        memory_cfg.get(
+            "qdrant_collection",
+            os.getenv("MEM0_QDRANT_COLLECTION", "miromemskill"),
+        )
+    )
+    env["MEM0_HISTORY_DB_PATH"] = str(
+        memory_cfg.get(
+            "history_db_path",
+            os.getenv("MEM0_HISTORY_DB_PATH", "memory_bank/mem0_history.db"),
+        )
+    )
+    env["MEM0_EMBEDDING_MODEL"] = str(
+        memory_cfg.get("embedding_model", "embedding-3")
+    )
+    env["MEM0_EMBEDDING_DIMS"] = str(
+        memory_cfg.get("embedding_dims", 2048)
+    )
+    for name in (
+        "REFLECTION_LLM_API_KEY",
+        "REFLECTION_LLM_BASE_URL",
+        "REFLECTION_LLM_MODEL_NAME",
+        "MEM0_TELEMETRY",
+    ):
+        value = os.getenv(name)
+        if value is not None:
+            env.setdefault(name, value)
+    return env
+
+
 # MCP server configuration generation function
 def create_mcp_server_parameters(
     cfg: DictConfig, agent_cfg: DictConfig, logs_dir: str | None = None
 ):
     """Define and return MCP server configuration list"""
+    load_project_env()
     configs = []
 
     if agent_cfg.get("tool_config", None) is not None:
@@ -34,6 +102,7 @@ def create_mcp_server_parameters(
                     / f"{tool}.yaml"
                 )
                 tool_cfg = OmegaConf.load(config_path)
+                tool_env = _resolved_tool_env(tool_cfg, cfg)
                 configs.append(
                     {
                         "name": tool_cfg.get("name", tool),
@@ -42,7 +111,7 @@ def create_mcp_server_parameters(
                             if tool_cfg["tool_command"] == "python"
                             else tool_cfg["tool_command"],
                             args=tool_cfg.get("args", []),
-                            env=tool_cfg.get("env", {}),
+                            env=tool_env,
                         ),
                     }
                 )

@@ -2,6 +2,8 @@
 # (ashare_v3..v7) were built on the 12-stock pool / other protocols and their
 # lessons reference answers to overlapping tasks.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_poolv4"

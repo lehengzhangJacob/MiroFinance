@@ -20,17 +20,20 @@ from fastmcp import FastMCP
 
 from src.logging.logger import setup_mcp_logging
 from src.memory.monthly_reflection import compute_month_feature_rows
+from src.utils.ashare_momentum import render_relative_momentum_baseline
+from src.utils.ashare_trader_features import (
+    render_trader_universe_context,
+    resolve_history_sessions,
+)
 
 setup_mcp_logging(tool_name=os.path.basename(__file__))
 mcp = FastMCP("ashare-market-mcp-server")
 
 _DATA_DIR = Path(os.environ.get("ASHARE_DATA_DIR", "data/ashare"))
 
-# Local cache starts ~2023-01-01; default to the longest practical window so
-# agents see multi-quarter trend context without extra tool calls.
-DEFAULT_PRICE_LOOKBACK = 250
-DEFAULT_VALUATION_LOOKBACK = 250
-MAX_LOOKBACK_DAYS = 500
+# 0 = return every trading row available on or before as_of (no artificial cap).
+DEFAULT_PRICE_LOOKBACK = 0
+DEFAULT_VALUATION_LOOKBACK = 0
 
 
 def _norm_date(as_of: str) -> str:
@@ -58,6 +61,11 @@ def _cut(df: pd.DataFrame, as_of: str, date_col: str = "trade_date") -> pd.DataF
     return df[df[date_col] <= _norm_date(as_of)]
 
 
+def _history_tail(df: pd.DataFrame, lookback_days: int) -> pd.DataFrame:
+    sessions = resolve_history_sessions(len(df), lookback_days)
+    return df if sessions >= len(df) else df.tail(sessions)
+
+
 def _pct(a: float, b: float) -> float:
     return round((a / b - 1.0) * 100, 2)
 
@@ -69,7 +77,7 @@ def _window_summary(df: pd.DataFrame, close_col: str) -> str:
     for w in (5, 20, 60, 120):
         if len(closes) > w:
             lines.append(f"- 近{w}个交易日收益率: {_pct(last, closes.iloc[-1 - w])}%")
-    full_w = min(len(closes) - 1, MAX_LOOKBACK_DAYS)
+    full_w = len(closes) - 1
     if full_w > 120:
         lines.append(f"- 近{full_w}个交易日收益率: {_pct(last, closes.iloc[-1 - full_w])}%")
     if len(closes) > 20:
@@ -96,13 +104,12 @@ def ashare_price_history(ts_code: str, as_of: str, lookback_days: int = DEFAULT_
     Args:
         ts_code: Stock code like 600519.SH.
         as_of: Point-in-time cutoff date (YYYY-MM-DD). Data after this date is never returned.
-        lookback_days: Number of most recent trading days to return (default 250, max 500).
+        lookback_days: Most recent trading days to return; 0 = all rows on or before as_of.
     """
-    lookback_days = max(5, min(int(lookback_days), MAX_LOOKBACK_DAYS))
     df = _cut(_load_csv(f"daily_{ts_code}.csv"), as_of)
     if df.empty:
         return f"No data for {ts_code} on or before {as_of}."
-    tail = df.tail(lookback_days)
+    tail = _history_tail(df, lookback_days)
     cols = ["trade_date", "open_qfq", "high_qfq", "low_qfq", "close_qfq", "pct_chg", "vol", "amount"]
     out = [
         f"# {ts_code} 日线(前复权), 截至 {as_of}, 最近 {len(tail)} 个交易日",
@@ -120,14 +127,13 @@ def ashare_index_history(as_of: str, lookback_days: int = DEFAULT_PRICE_LOOKBACK
 
     Args:
         as_of: Point-in-time cutoff date (YYYY-MM-DD).
-        lookback_days: Number of most recent trading days to return (default 250, max 500).
+        lookback_days: Most recent trading days to return; 0 = all rows on or before as_of.
     """
-    lookback_days = max(5, min(int(lookback_days), MAX_LOOKBACK_DAYS))
     meta = _meta()
     df = _cut(_load_csv(f"index_{meta['index_code']}.csv"), as_of)
     if df.empty:
         return f"No index data on or before {as_of}."
-    tail = df.tail(lookback_days)
+    tail = _history_tail(df, lookback_days)
     cols = ["trade_date", "open", "high", "low", "close", "vol", "amount"]
     out = [
         f"# {meta['index_code']} 沪深300 日线, 截至 {as_of}, 最近 {len(tail)} 个交易日",
@@ -146,16 +152,15 @@ def ashare_valuation(ts_code: str, as_of: str, lookback_days: int = DEFAULT_VALU
     Args:
         ts_code: Stock code like 600519.SH.
         as_of: Point-in-time cutoff date (YYYY-MM-DD).
-        lookback_days: Trading days of history for percentile context (default 250, max 500).
+        lookback_days: Trading days of history for percentile context; 0 = all available.
     """
-    lookback_days = max(5, min(int(lookback_days), MAX_LOOKBACK_DAYS))
     try:
         df = _cut(_load_csv(f"daily_basic_{ts_code}.csv"), as_of)
     except FileNotFoundError:
         return f"Valuation data unavailable for {ts_code}."
     if df.empty:
         return f"No valuation data for {ts_code} on or before {as_of}."
-    tail = df.tail(lookback_days)
+    tail = _history_tail(df, lookback_days)
     latest = tail.iloc[-1]
     lines = [f"# {ts_code} 估值与流动性, 截至 {as_of}", "## 最新值"]
     for col, label in [
@@ -168,8 +173,8 @@ def ashare_valuation(ts_code: str, as_of: str, lookback_days: int = DEFAULT_VALU
             lines.append(
                 f"- {label}: {round(float(latest[col]), 3)} (近{len(series)}日分位 {pct_rank}%)"
             )
-    lines.append("## 最近10个交易日明细 (CSV)")
-    lines.append(tail.tail(10).round(3).to_csv(index=False))
+    lines.append("## 明细 (CSV)")
+    lines.append(tail.round(3).to_csv(index=False))
     return "\n".join(lines)
 
 
@@ -195,13 +200,13 @@ def ashare_ml_signal(ts_code: str, as_of: str) -> str:
     df = df[df["ts_code"] == ts_code]
     if df.empty:
         return f"No ML signal for {ts_code} on or before {as_of}."
-    tail = df.sort_values("entry_date").tail(6)
+    tail = df.sort_values("entry_date")
     latest = tail.iloc[-1]
     out = [
         f"# {ts_code} qlib机器学习信号 (LightGBM+Alpha158, 逐月walk-forward训练), 截至 {as_of}",
         f"最新: 决策日 {latest['entry_date']}, score={latest['score']:.4f}, "
         f"池内排名 {int(latest['rank'])}/{int(latest['n_stocks'])} (rank 1 = 预测未来20日收益最高)",
-        "## 最近月度信号 (CSV)",
+        "## 全部可用月度信号 (CSV)",
         tail[["entry_date", "score", "rank", "n_stocks"]].to_csv(index=False),
     ]
     return "\n".join(out)
@@ -223,14 +228,66 @@ def ashare_financials(ts_code: str, as_of: str) -> str:
     df = df[df["ann_date"] <= _norm_date(as_of)]
     if df.empty:
         return f"No financial reports announced on or before {as_of} for {ts_code}."
-    tail = df.sort_values("ann_date").tail(6)
+    tail = df.sort_values("ann_date")
     out = [
-        f"# {ts_code} 财务指标, 仅含公告日 <= {as_of} 的报告 (最近{len(tail)}期)",
+        f"# {ts_code} 财务指标, 仅含公告日 <= {as_of} 的报告 (共{len(tail)}期)",
         "字段: ann_date=公告日, end_date=报告期, eps=每股收益, roe=净资产收益率%, "
         "or_yoy=营收同比%, netprofit_yoy=净利润同比%",
         tail.round(3).to_csv(index=False),
     ]
     return "\n".join(out)
+
+
+@mcp.tool()
+def ashare_trader_universe_context(
+    as_of: str,
+    lookback_days: int = DEFAULT_PRICE_LOOKBACK,
+) -> str:
+    """Get one compact 16-stock history panel for a unified portfolio decision.
+
+    The panel gives every stock the same point-in-time information budget:
+    absolute and CSI-300-relative returns over 5/20/60/120/250 sessions,
+    volatility, drawdown, trend, liquidity, 250-session valuation percentiles,
+    latest announced fundamentals, walk-forward Qlib signals, and compressed
+    monthly paths.  It never includes future returns or benchmark labels.
+
+    Args:
+        as_of: Point-in-time cutoff date (YYYY-MM-DD or YYYYMMDD).
+        lookback_days: History window in trading sessions; 0 = all available on or before as_of.
+    """
+    return render_trader_universe_context(
+        as_of,
+        _meta()["stock_pool"],
+        data_dir=_DATA_DIR,
+        lookback_days=lookback_days,
+    )
+
+
+@mcp.tool()
+def ashare_momentum_baseline(
+    as_of: str,
+    window: int = 20,
+    top_k: int = 4,
+) -> str:
+    """Build a point-in-time relative-momentum soft anchor for the whole pool.
+
+    The tool ranks every stock by its trailing adjusted return minus the CSI
+    300 return over the same window, then forms a max-25%-per-stock top-k
+    reference portfolio.  It never reads rows after ``as_of`` and never uses
+    realized holding-period returns or benchmark labels.
+
+    Args:
+        as_of: Decision-date cutoff (YYYY-MM-DD or YYYYMMDD).
+        window: Relative-return window; one of 5, 20, 60, 120, or 250.
+        top_k: Number of leading stocks in the anchor, between 1 and 4.
+    """
+    return render_relative_momentum_baseline(
+        as_of,
+        _meta()["stock_pool"],
+        data_dir=_DATA_DIR,
+        window=window,
+        top_k=top_k,
+    )
 
 
 @mcp.tool()

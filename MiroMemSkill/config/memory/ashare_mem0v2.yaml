@@ -3,6 +3,8 @@
 # provably amplified the agent's bearish prior (mem0 v1 run: 87% 跑输).
 # Fresh namespace; run with benchmark.execution.task_order=monthly.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare_mem0v2"

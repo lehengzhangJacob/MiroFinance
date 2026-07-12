@@ -219,6 +219,8 @@ data/*
 !data/ashare_pred/**
 !data/ashare_rank/
 !data/ashare_rank/**
+!data/ashare_trader/
+!data/ashare_trader/**
 
 debug.py
 **/debug.py

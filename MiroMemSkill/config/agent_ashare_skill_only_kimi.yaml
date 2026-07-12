@@ -28,7 +28,7 @@ main_agent:
 
   tool_config:
     - tool-ashare
-    - tool-memskill-ashare-mem0v3
+    - tool-memskill-ashare-skill-only
   tool_blacklist:
     - ["tool-memskill", "memory_search"]
     - ["tool-memskill", "memory_save"]

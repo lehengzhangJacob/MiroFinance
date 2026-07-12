@@ -2,6 +2,8 @@
 # Isolated namespace + skills dir so the running FinSearchComp experiment
 # (namespace "default", memory_bank/skills) is never contaminated.
 enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
 store_dir: "memory_bank"
 skills_dir: "memory_bank/skills_ashare"
 namespace: "ashare"

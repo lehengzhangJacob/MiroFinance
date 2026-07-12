@@ -216,23 +216,29 @@ class GPTOpenAIClient(LLMProviderClientBase):
                     )
                 assistant_response_text = "\n".join(tool_call_descriptions)
 
-            message_history.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_response_text,
-                    "tool_calls": [
-                        {
-                            "id": _.id,
-                            "type": "function",
-                            "function": {
-                                "name": _.function.name,
-                                "arguments": _.function.arguments,
-                            },
-                        }
-                        for _ in tool_calls
-                    ],
-                }
+            assistant_message = {
+                "role": "assistant",
+                "content": assistant_response_text,
+                "tool_calls": [
+                    {
+                        "id": _.id,
+                        "type": "function",
+                        "function": {
+                            "name": _.function.name,
+                            "arguments": _.function.arguments,
+                        },
+                    }
+                    for _ in tool_calls
+                ],
+            }
+            # Kimi K2.6 thinking mode requires the reasoning content attached
+            # to a tool-call turn to be sent back on the following request.
+            reasoning_content = getattr(
+                llm_response.choices[0].message, "reasoning_content", None
             )
+            if reasoning_content is not None:
+                assistant_message["reasoning_content"] = reasoning_content
+            message_history.append(assistant_message)
         elif llm_response.choices[0].finish_reason == "length":
             assistant_response_text = llm_response.choices[0].message.content or ""
             if assistant_response_text == "":

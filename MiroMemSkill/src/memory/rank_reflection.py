@@ -19,6 +19,23 @@ _FACTORS = {
     "turn_pct": ("换手率分位", 1.0),
     # Lower Qlib rank is better, so negate it before computing IC.
     "ml_rank": ("Qlib预测排序", -1.0),
+    # Extended fields are present in unified-trader samples only.  Legacy rank
+    # samples omit them, so adding the candidates does not alter old q-values.
+    "rel120": ("近120日相对动量", 1.0),
+    "rel250": ("近250日相对动量", 1.0),
+    "vol20_ann": ("近20日低波动方向", -1.0),
+    "vol60_ann": ("近60日低波动方向", -1.0),
+    "max_dd120": ("近120日回撤韧性", 1.0),
+    "max_dd250": ("近250日回撤韧性", 1.0),
+    "from_high250": ("距250日高点强度", 1.0),
+    "ma20_gap": ("相对20日均线强度", 1.0),
+    "ma60_gap": ("相对60日均线强度", 1.0),
+    "ma120_gap": ("相对120日均线强度", 1.0),
+    "amount20_vs120": ("成交额20日/120日变化", 1.0),
+    "pe_pct250": ("PE近250日分位", 1.0),
+    "pb_pct250": ("PB近250日分位", 1.0),
+    "turn_pct250": ("换手率近250日分位", 1.0),
+    "ml_score": ("Qlib预测分数", 1.0),
 }
 
 
