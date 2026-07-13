@@ -88,10 +88,93 @@ class PortfolioMonthResult:
     contributions: dict[str, float] = field(default_factory=dict)
 
 
+_LATEX_WRAPPER_PATTERN = re.compile(
+    r"\\(?:text|textbf|textit|mathrm|mathtt|mathsf|mathbf|operatorname)"
+    r"\s*\{([^{}]*)\}"
+)
+_LATEX_NOISE_PATTERN = re.compile(r"\\[,;!: ]|\$")
+_ALLOCATION_TOKEN_PATTERN = re.compile(
+    r"\s*(CASH|现金|\d{6}(?:\.(?:SH|SZ))?)\s*[:=：]\s*"
+    r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*",
+    flags=re.IGNORECASE,
+)
+
+
+def _extract_last_boxed(text: str) -> str | None:
+    """Return the last ``\\boxed{...}`` body using balanced-brace scanning.
+
+    The previous regex ``\\boxed\\{([^{}]*)\\}`` silently failed on nested
+    braces (e.g. ``\\boxed{600015.\\text{SH}, w=1.00}``), causing validation
+    to fall back to the full prose and emit misleading errors.
+    """
+    marker = r"\boxed{"
+    matches: list[str] = []
+    index = 0
+    while True:
+        start = text.find(marker, index)
+        if start == -1:
+            break
+        depth = 1
+        cursor = start + len(marker)
+        while cursor < len(text) and depth:
+            char = text[cursor]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            cursor += 1
+        if depth:
+            index = start + len(marker)
+            continue
+        matches.append(text[start + len(marker) : cursor - 1])
+        index = cursor
+    return matches[-1] if matches else None
+
+
+def _normalize_boxed_latex(content: str) -> str:
+    """Unwrap LaTeX text commands and strip spacing noise inside a boxed body."""
+    result = content
+    for _ in range(3):
+        unwrapped = _LATEX_WRAPPER_PATTERN.sub(r"\1", result)
+        if unwrapped == result:
+            break
+        result = unwrapped
+    return _LATEX_NOISE_PATTERN.sub("", result).strip()
+
+
+def _last_raw_allocation_line(raw: str) -> str | None:
+    """Find a bare terminal allocation line when the model omitted ``\boxed``."""
+    for line in reversed(raw.splitlines()):
+        candidate = line.strip().strip("`").strip()
+        if not candidate:
+            continue
+        tokens = [
+            token.strip()
+            for token in re.split(r"[,，;；]+", candidate)
+            if token.strip()
+        ]
+        if (
+            len(tokens) >= 2
+            and all(_ALLOCATION_TOKEN_PATTERN.fullmatch(token) for token in tokens)
+            and any(
+                str(match.group(1)).upper() in {"CASH", "现金"}
+                for token in tokens
+                if (match := _ALLOCATION_TOKEN_PATTERN.fullmatch(token))
+            )
+        ):
+            return candidate
+    return None
+
+
 def _boxed_candidate(text: str) -> str:
     raw = str(text or "").strip()
-    boxed = re.findall(r"\\boxed\{([^{}]*)\}", raw, flags=re.DOTALL)
-    return boxed[-1].strip() if boxed else raw
+    boxed = _extract_last_boxed(raw)
+    # The candidate may arrive already unwrapped (OutputFormatter strips the
+    # \boxed{} shell before terminal validation), so normalize either way.
+    if boxed is not None:
+        return _normalize_boxed_latex(boxed.strip())
+    bare = _last_raw_allocation_line(raw)
+    return _normalize_boxed_latex((bare if bare is not None else raw).strip())
 
 
 _STOCK_CODE_INTENT_PATTERN = re.compile(
@@ -208,12 +291,7 @@ def parse_portfolio_weights(
 
     parsed: dict[str, float] = {}
     for token in tokens:
-        match = re.fullmatch(
-            r"\s*(CASH|现金|\d{6}(?:\.(?:SH|SZ))?)\s*[:=：]\s*"
-            r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*",
-            token,
-            flags=re.IGNORECASE,
-        )
+        match = _ALLOCATION_TOKEN_PATTERN.fullmatch(token)
         if not match:
             return PortfolioParseResult(
                 zero_weights,
@@ -440,6 +518,48 @@ def validate_portfolio_answer(
     )
     if not parsed.ok:
         return PortfolioValidationResult(parsed)
+    active_weights = [
+        value for value in parsed.weights.values() if value > WEIGHT_TOLERANCE
+    ]
+    holding_count = len(active_weights)
+    min_holdings = int(raw.get("min_holdings", 0) or 0)
+    max_holdings = int(raw.get("max_holdings", 0) or 0)
+    min_active_weight = float(raw.get("min_active_stock_weight", 0.0))
+    min_cash = float(raw.get("min_cash_weight", 0.0))
+    max_cash = float(raw.get("max_cash_weight", 1.0))
+    constraint_error = ""
+    if min_holdings and holding_count < min_holdings:
+        constraint_error = (
+            f"portfolio must hold at least {min_holdings} stocks; held {holding_count}"
+        )
+    elif max_holdings and holding_count > max_holdings:
+        constraint_error = (
+            f"portfolio must hold at most {max_holdings} stocks; held {holding_count}"
+        )
+    elif min_active_weight and any(
+        value < min_active_weight - WEIGHT_TOLERANCE for value in active_weights
+    ):
+        smallest = min(active_weights)
+        constraint_error = (
+            f"active stock weight {smallest:.8f} is below minimum "
+            f"{min_active_weight:.8f}"
+        )
+    elif parsed.cash < min_cash - WEIGHT_TOLERANCE:
+        constraint_error = (
+            f"CASH weight {parsed.cash:.8f} is below minimum {min_cash:.8f}"
+        )
+    elif parsed.cash > max_cash + WEIGHT_TOLERANCE:
+        constraint_error = (
+            f"CASH weight {parsed.cash:.8f} exceeds maximum {max_cash:.8f}"
+        )
+    if constraint_error:
+        invalid = PortfolioParseResult(
+            parsed.weights,
+            parsed.cash,
+            False,
+            constraint_error,
+        )
+        return PortfolioValidationResult(invalid)
     anchor = validate_anchor_from_metadata(parsed.weights, parsed.cash, raw)
     return PortfolioValidationResult(parsed, anchor)
 

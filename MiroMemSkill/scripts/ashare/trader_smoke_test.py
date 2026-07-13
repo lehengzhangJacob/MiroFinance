@@ -987,7 +987,7 @@ def test_hard_anchor_and_breadth(tasks: list[dict[str, Any]]) -> None:
 
 
 def test_trader_guardrails(tasks: list[dict[str, Any]]) -> None:
-    assert MAX_TRADER_PORTFOLIO_REPAIRS == 2
+    assert MAX_TRADER_PORTFOLIO_REPAIRS == 3
     assert REQUIRED_TRADER_ANCHOR_TOOLS == {
         "ashare_momentum_baseline",
         "ashare_market_breadth",
@@ -995,11 +995,47 @@ def test_trader_guardrails(tasks: list[dict[str, Any]]) -> None:
     metadata = tasks[0]["metadata"]
     pool = metadata["stock_pool"]
     cutoff = metadata["entry_date"]
+    open_required_metadata = {
+        **metadata,
+        "required_tools": [
+            "ashare_market_breadth",
+            "ashare_index_history",
+        ],
+    }
+    required_error = _ashare_trader_terminal_error(
+        f"{pool[0]}:0.25,{pool[1]}:0.25,CASH:0.50",
+        open_required_metadata,
+        set(),
+    )
+    assert "mandatory trader tools" in required_error
+    assert "ashare_market_breadth" in required_error
+    assert (
+        _ashare_trader_terminal_error(
+            f"{pool[0]}:0.25,{pool[1]}:0.25,CASH:0.50",
+            open_required_metadata,
+            {"ashare_market_breadth", "ashare_index_history"},
+        )
+        == ""
+    )
     _validate_ashare_trader_tool_call(
         "ashare_price_history",
         {"ts_code": pool[0], "as_of": cutoff},
         metadata,
     )
+    _validate_ashare_trader_tool_call(
+        "ashare_market_breadth",
+        {"as_of": cutoff},
+        open_required_metadata,
+    )
+    try:
+        _validate_ashare_trader_tool_call(
+            "ashare_market_breadth",
+            {"as_of": "2024-06-28"},
+            open_required_metadata,
+        )
+        raise AssertionError("required open-universe tool accepted a stale cutoff")
+    except ValueError as error:
+        assert "exact task cutoff" in str(error)
 
     try:
         _validate_ashare_trader_tool_call(
@@ -1134,8 +1170,8 @@ def test_core_satellite_runtime_attachment(
         assert core.memory.namespace == (
             "ashare_trader_core_satellite_attribution_smoke-core-runtime"
         )
-        assert core.memory.skill_enabled is False
-        assert core.memory.skill_top_k == 0
+        assert core.memory.skill_enabled is True
+        assert core.memory.skill_top_k == 1
 
         task_data = tasks[0]
         runtime_task = BenchmarkTask(
@@ -1289,6 +1325,12 @@ def test_parser_and_finance(tasks: list[dict[str, Any]]) -> None:
     )
     parsed = parse_portfolio_weights(valid, pool)
     assert parsed.ok and parsed.cash == 0.45
+    bare_terminal = (
+        "正文仍可描述市场上涨20%，但最后没有 boxed。\n"
+        f"{pool[0]}:0.25,{pool[1]}:0.20,{pool[2]}:0.10,CASH:0.45"
+    )
+    bare_parsed = parse_portfolio_weights(bare_terminal, pool)
+    assert bare_parsed.ok and bare_parsed.cash == 0.45
     assert not parse_portfolio_weights(
         f"\\boxed{{{pool[0]}:0.30,CASH:0.70}}", pool
     ).ok
@@ -1301,6 +1343,43 @@ def test_parser_and_finance(tasks: list[dict[str, Any]]) -> None:
     assert not parse_portfolio_weights(
         f"\\boxed{{{pool[0]}:0.25}}", pool
     ).ok
+
+    v3_metadata = {
+        **first["metadata"],
+        "min_holdings": 4,
+        "max_holdings": 8,
+        "min_active_stock_weight": 0.05,
+        "min_cash_weight": 0.35,
+        "max_cash_weight": 0.55,
+    }
+    v3_valid = (
+        "\\boxed{"
+        + ",".join(f"{code}:0.15" for code in pool[:4])
+        + ",CASH:0.40}"
+    )
+    assert validate_portfolio_answer(v3_valid, v3_metadata).ok
+    too_few = (
+        f"\\boxed{{{pool[0]}:0.20,{pool[1]}:0.20,"
+        f"{pool[2]}:0.15,CASH:0.45}}"
+    )
+    too_few_result = validate_portfolio_answer(too_few, v3_metadata)
+    assert not too_few_result.ok
+    assert "at least 4 stocks" in too_few_result.error
+    tiny_position = (
+        f"\\boxed{{{pool[0]}:0.25,{pool[1]}:0.20,{pool[2]}:0.05,"
+        f"{pool[3]}:0.04,CASH:0.46}}"
+    )
+    tiny_result = validate_portfolio_answer(tiny_position, v3_metadata)
+    assert not tiny_result.ok
+    assert "below minimum" in tiny_result.error
+    excess_cash = (
+        "\\boxed{"
+        + ",".join(f"{code}:0.10" for code in pool[:4])
+        + ",CASH:0.60}"
+    )
+    excess_cash_result = validate_portfolio_answer(excess_cash, v3_metadata)
+    assert not excess_cash_result.ok
+    assert "exceeds maximum" in excess_cash_result.error
 
     weights = {code: 0.0 for code in pool}
     weights[pool[0]] = 0.25
@@ -1692,6 +1771,15 @@ def test_dispatch_and_configs() -> None:
     assert glm.main_agent.llm.model_name == "glm-5.2"
     assert glm.benchmark.anchor_policy.mode == "core_satellite"
 
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        open_v3 = compose(config_name="agent_ashare_trader_open_v3_glm")
+    assert open_v3.benchmark.name == "ashare-trader-open"
+    assert open_v3.benchmark.data.data_dir.endswith("ashare_trader_open_v3")
+    assert open_v3.benchmark.anchor_policy.enabled is False
+    assert open_v3.main_agent.llm.model_name == "glm-5.2"
+    assert open_v3.main_agent.llm.temperature == 0.5
+    assert open_v3.main_agent.max_turns == 28
+
     previous = os.environ.get("ASHARE_TRADER_RUN_ID")
     os.environ["ASHARE_TRADER_RUN_ID"] = "smoke-isolated"
     try:
@@ -1706,8 +1794,8 @@ def test_dispatch_and_configs() -> None:
         assert core.memory.namespace == (
             "ashare_trader_core_satellite_attribution_smoke-isolated"
         )
-        assert core.memory.skill_enabled is False
-        assert core.memory.skill_top_k == 0
+        assert core.memory.skill_enabled is True
+        assert core.memory.skill_top_k == 1
         assert core.memory.reflection_mode == "trader"
         assert core.main_agent.max_turns == -1
         assert core.main_agent.llm.thinking_mode == "enabled"

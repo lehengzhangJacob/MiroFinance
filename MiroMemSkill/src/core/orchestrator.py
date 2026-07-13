@@ -40,7 +40,7 @@ from src.utils.ashare_trader import (
 
 LOGGER_LEVEL = os.getenv("LOGGER_LEVEL", "INFO")
 logger = bootstrap_logger(level=LOGGER_LEVEL)
-MAX_TRADER_PORTFOLIO_REPAIRS = 2
+MAX_TRADER_PORTFOLIO_REPAIRS = 3
 REQUIRED_TRADER_ANCHOR_TOOLS = frozenset(
     {"ashare_momentum_baseline", "ashare_market_breadth"}
 )
@@ -136,12 +136,28 @@ def _ashare_trader_mandatory_tool_error(
     metadata: dict[str, Any] | None,
     tools_seen: set[str] | frozenset[str],
 ) -> str:
-    if not _ashare_trader_anchor_enabled(metadata):
-        return ""
-    missing = sorted(REQUIRED_TRADER_ANCHOR_TOOLS - set(tools_seen))
-    if not missing:
-        return ""
-    return "mandatory hard-anchor tools not called successfully: " + ",".join(missing)
+    raw = metadata or {}
+    errors: list[str] = []
+    seen = set(tools_seen)
+    if _ashare_trader_anchor_enabled(metadata):
+        missing_anchor = sorted(REQUIRED_TRADER_ANCHOR_TOOLS - seen)
+        if missing_anchor:
+            errors.append(
+                "mandatory hard-anchor tools not called successfully: "
+                + ",".join(missing_anchor)
+            )
+    required = {
+        str(name).strip()
+        for name in raw.get("required_tools", [])
+        if str(name).strip()
+    }
+    missing_required = sorted(required - seen)
+    if missing_required:
+        errors.append(
+            "mandatory trader tools not called successfully: "
+            + ",".join(missing_required)
+        )
+    return "; ".join(errors)
 
 
 def _replace_or_append_final_boxed(text: str, canonical_boxed: str) -> str:
@@ -250,7 +266,7 @@ def _validate_ashare_trader_tool_call(
     if ts_code and ts_code not in pool:
         raise ValueError(
             f"{tool_name} rejected stock outside the task pool: {ts_code}; "
-            "use only one of the 16 codes in the original task"
+            "use only a code from the task's allowed stock pool"
         )
 
     cutoff = _normalize_ashare_date(
@@ -268,15 +284,24 @@ def _validate_ashare_trader_tool_call(
             f"{tool_name} rejected lookahead as_of={requested_as_of}; "
             f"the task cutoff is {cutoff}"
         )
-    if (
+    required_tools = {
+        str(name).strip()
+        for name in (metadata or {}).get("required_tools", [])
+        if str(name).strip()
+    }
+    exact_cutoff_required = (
         _ashare_trader_anchor_enabled(metadata)
         and tool_name in REQUIRED_TRADER_ANCHOR_TOOLS
-    ):
+    ) or tool_name in required_tools
+    if exact_cutoff_required:
         if requested_as_of != cutoff:
             raise ValueError(
                 f"{tool_name} must use the exact task cutoff as_of={cutoff}"
             )
-        if tool_name == "ashare_momentum_baseline":
+        if (
+            _ashare_trader_anchor_enabled(metadata)
+            and tool_name == "ashare_momentum_baseline"
+        ):
             try:
                 window = int(arguments.get("window", 20))
                 top_k = int(arguments.get("top_k", 4))
@@ -1326,11 +1351,56 @@ Your objective is maximum completeness, transparency, and detailed documentation
                     and trader_repair_count < MAX_TRADER_PORTFOLIO_REPAIRS
                 ):
                     trader_repair_count += 1
+                    if "tools not called successfully" in portfolio_error:
+                        repair_action = (
+                            "只调用错误中列出的缺失工具（使用任务的精确 as_of），"
+                            "不要扩展其他搜索；工具完成后"
+                        )
+                    else:
+                        repair_action = (
+                            "不要再调用工具，不要重写正文或解释；下一条回复"
+                        )
+                    raw_metadata = metadata or {}
+                    constraint_parts = [
+                        "股票与CASH权重总和=1",
+                        "必须显式包含CASH",
+                        "单只股票权重不超过"
+                        f"{float(raw_metadata.get('max_stock_weight', 0.25)):.2f}",
+                    ]
+                    min_holdings = int(raw_metadata.get("min_holdings", 0) or 0)
+                    max_holdings = int(raw_metadata.get("max_holdings", 0) or 0)
+                    if min_holdings or max_holdings:
+                        constraint_parts.append(
+                            f"持仓数量={min_holdings or 1}-{max_holdings or '不限'}只"
+                        )
+                    min_active_weight = float(
+                        raw_metadata.get("min_active_stock_weight", 0.0) or 0.0
+                    )
+                    if min_active_weight:
+                        constraint_parts.append(
+                            f"每只有效持仓权重至少{min_active_weight:.2f}"
+                        )
+                    min_cash = float(
+                        raw_metadata.get("min_cash_weight", 0.0) or 0.0
+                    )
+                    max_cash = float(
+                        raw_metadata.get("max_cash_weight", 1.0)
+                    )
+                    if min_cash or max_cash < 1.0:
+                        constraint_parts.append(
+                            f"CASH权重范围={min_cash:.2f}-{max_cash:.2f}"
+                        )
+                    constraint_hint = "；".join(constraint_parts)
                     repair_prompt = (
                         "你的终局组合未通过确定性 A 股硬约束复核："
-                        f"{portfolio_error}。请保留已有点时分析，只完成错误要求的"
-                        "必要工具调用或仓位修正，不扩展其他搜索；随后重新给出正文"
-                        "和最后一行 boxed 组合。"
+                        f"{portfolio_error}。请保留已有点时分析，{repair_action}"
+                        f"只能输出一行 boxed 组合。完整硬约束：{constraint_hint}。"
+                        "boxed 内容必须是纯文本的"
+                        "「代码:权重」逗号分隔列表，且必须包含 CASH，权重为 0-1 "
+                        "小数且总和等于 1，例如："
+                        "\\boxed{600519.SH:0.20,300750.SZ:0.15,CASH:0.65}。"
+                        "禁止使用 LaTeX 命令（\\text、\\mathrm、\\; 等）、"
+                        "w= 写法、百分号或任何解释文字。"
                     )
                     message_history.append(
                         {
@@ -1395,7 +1465,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
                             )
                         )
                         if (
-                            server_name == "tool-ashare"
+                            server_name in {"tool-ashare", "tool-ashare-open"}
                             and not (
                                 isinstance(tool_result, dict)
                                 and tool_result.get("error")
