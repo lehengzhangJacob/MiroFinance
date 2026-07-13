@@ -1,0 +1,19 @@
+# Monthly stocks-only open-universe A-share benchmark (12 paired tasks).
+defaults:
+  - default
+  - _self_
+
+name: "ashare-trader-open"
+
+data:
+  data_dir: "${oc.env:ASHARE_OPEN_TASK_ROOT,/home/msj_team/Jacob/agent/MiroMemSkill/data}/ashare_trader_open"
+  metadata_file: "standardized_data.jsonl"
+  whitelist: []
+
+execution:
+  max_tasks: null
+  max_concurrent: 1
+  pass_at_k: 1
+  task_order: monthly
+
+openai_api_key: "${oc.env:OPENAI_API_KEY,unused-for-deterministic-trader-judge}"

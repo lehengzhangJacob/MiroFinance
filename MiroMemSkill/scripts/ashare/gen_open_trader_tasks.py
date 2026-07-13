@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 DB_PATH = ROOT / "data" / "ashare_pools.db"
 LEGACY_TASKS = ROOT / "data" / "ashare_trader" / "standardized_data.jsonl"
 DEFAULT_VERSION = "v2"
-SUPPORTED_VERSIONS = ("v2", "v3")
+SUPPORTED_VERSIONS = ("v2", "v3", "v4")
 DEFAULT_OUT_DIRS = {
     version: ROOT / "data" / f"ashare_trader_open_{version}"
     for version in SUPPORTED_VERSIONS
@@ -41,6 +41,14 @@ CASH_BANDS = {
     "neutral": (0.20, 0.40),
     "defensive": (0.35, 0.55),
 }
+V4_FIXED_CORE_WEIGHTS = {
+    "510300.SH": 0.20,
+    "510500.SH": 0.20,
+    "512100.SH": 0.20,
+}
+V4_ALPHA_COUNT = 3
+V4_ALPHA_WEIGHT = 0.10
+V4_CASH_WEIGHT = 0.10
 
 # v2 template: the tool menu is deliberately neutral (no momentum-first
 # suggestion), adds the empirically observed A-share short-horizon reversal
@@ -103,9 +111,38 @@ QUESTION_TEMPLATE_V3 = """\
 - 权重使用 0 到 1 的小数且总和严格等于 1，例如 \\boxed{{600519.SH:0.20,300750.SZ:0.15,600036.SH:0.15,601318.SH:0.10,CASH:0.40}}。
 """
 
+QUESTION_TEMPLATE_V4 = """\
+你是同一名持续管理资金的 A 股交易员。当前日期为 {as_of}（收盘后）。
+
+本策略采用不可更改的“宽基 ETF 核心 + 成长质量 Alpha”结构：
+- 固定核心：510300.SH 沪深300ETF 20%、510500.SH 中证500ETF 20%、512100.SH 中证1000ETF 20%；
+- 固定现金：CASH 10%；
+- 你只负责从【全部 A 股约 {pool_size} 只可交易股票】中选择恰好 3 只 Alpha 股票，每只固定 10%；
+- 所有仓位从 {as_of} 收盘买入，持有 {horizon} 个交易日后按收盘卖出。回测从 100 万元逐期复利，按 100 股/份整手成交，并计买入 0.05%、卖出 0.15%、每笔最低 5 元。
+
+Alpha 硬纪律（必须全部遵守）：
+- 只能选择 {as_of} 当日实际有成交、非 ST、未退市的股票；ETF 不能作为 Alpha；
+- 先排除近20日日均成交额低于 200000 千元、PE_TTM 非正或高于 60、近20日涨幅超过 50% 或低于 -20% 的股票；
+- 排除最新已公告财务中营收与净利润同时恶化的股票；财务数据必须按 ann_date<={as_of} 截断；
+- 三只 Alpha 尽量覆盖至少两个行业，禁止仅凭题材、单一低 PE 或单一短期动量建仓。
+
+必须执行的点时筛选路径：
+1. 调用 ashare_market_breadth 和 ashare_index_history 了解环境，但不得据此改动固定 ETF/现金权重；当前预计算近20日正收益占比 {breadth_pct:.1f}%，状态 {regime}；
+2. 至少用 ashare_screen_market 的流动性、适度相对强度等不同口径构建候选；使用 min_pe_ttm=5、max_pe_ttm=60、min_window_return=-20、max_window_return=50 约束追高与亏损股；
+3. 将 5-20 只候选一次性传给 ashare_compare_growth_quality，并只从硬过滤为 YES 的候选中选择最终三只；
+4. 优先选择“已公告营收/净利增长或加速 + ROE/毛利率确认 + PE 可解释或利润驱动的 PE 压缩 + 高流动性 + 非极端相对强度”交叉成立的股票。
+
+输出要求：
+- 正文简要列出候选构建、成长质量交叉验证、淘汰原因和三只入选股；
+- 最后一行必须完整且严格输出：
+  \\boxed{{510300.SH:0.20,510500.SH:0.20,512100.SH:0.20,股票1:0.10,股票2:0.10,股票3:0.10,CASH:0.10}}
+- boxed 内容只能是纯文本“代码:权重”逗号分隔列表；禁止 LaTeX 命令、w=、百分号或解释文字。
+"""
+
 QUESTION_TEMPLATES = {
     "v2": QUESTION_TEMPLATE_V2,
     "v3": QUESTION_TEMPLATE_V3,
+    "v4": QUESTION_TEMPLATE_V4,
 }
 
 
@@ -201,6 +238,28 @@ def build_tasks(version: str = DEFAULT_VERSION) -> list[dict[str, Any]]:
                         "ashare_index_history",
                         "ashare_screen_market",
                         "ashare_financials",
+                    ],
+                }
+            elif version == "v4":
+                version_metadata = {
+                    "strategy_version": "v4",
+                    "market_regime": regime,
+                    "positive_ret20_share": round(breadth_pct / 100.0, 6),
+                    "asset_pool": [*V4_FIXED_CORE_WEIGHTS, *pool],
+                    "fixed_core_weights": dict(V4_FIXED_CORE_WEIGHTS),
+                    "alpha_count": V4_ALPHA_COUNT,
+                    "alpha_weight": V4_ALPHA_WEIGHT,
+                    "cash_weight": V4_CASH_WEIGHT,
+                    "min_holdings": 6,
+                    "max_holdings": 6,
+                    "min_active_stock_weight": V4_ALPHA_WEIGHT,
+                    "min_cash_weight": V4_CASH_WEIGHT,
+                    "max_cash_weight": V4_CASH_WEIGHT,
+                    "required_tools": [
+                        "ashare_market_breadth",
+                        "ashare_index_history",
+                        "ashare_screen_market",
+                        "ashare_compare_growth_quality",
                     ],
                 }
             tasks.append(

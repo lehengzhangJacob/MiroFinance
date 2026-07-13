@@ -1,6 +1,10 @@
 ---
 name: multi_hop_financial_calculation
 description: 多跳金融计算——先分解子问题、逐步聚合、单位与舍入规范
+version: "2.0"
+applies_to: [financial_calculation, multi_entity_aggregation]
+stock_universe: not_applicable
+dependencies: [search_tool, code_tool]
 triggers:
   - 计算
   - 平均

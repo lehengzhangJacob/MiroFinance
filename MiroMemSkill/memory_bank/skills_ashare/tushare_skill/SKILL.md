@@ -1,14 +1,17 @@
 ---
 name: tushare_skill
 description: 规范化 Tushare Pro 数据技能——点时安全的A股行情/指数/估值/财务/日历 CLI，统一 token 解析与前复权口径
+version: "2.0"
+applies_to: [data_research, cache_maintenance, field_convention_reference]
+stock_universe: all_ashare
+dependencies: [Tushare_Pro, local_cache]
 triggers:
   - tushare
-  - 行情
-  - 日线
-  - 估值
-  - 财务
+  - 数据口径
+  - pct_chg
   - 数据获取
   - 复权
+  - 缓存更新
   - 交易日历
 ---
 
@@ -18,14 +21,16 @@ triggers:
 
 | 工具字段 | 口径 |
 |----------|------|
-| `close_qfq` 等 | 前复权价，基准=数据末端复权因子；跨除权日的区间收益直接用 qfq 相除即可 |
-| `pct_chg` | 当日涨跌幅%（未复权口径，勿跨除权日累乘） |
+| `close` | 未复权收盘价，只用于展示或与同口径 `pre_close` 核对，不直接跨除权日相除 |
+| `close_qfq` 等 | CLI 查询内以前复权价格展示，基准为该次查询 `as_of` 的复权因子；只能在同一次查询窗口内相除 |
+| `pct_chg` | Tushare 日涨跌幅，基于交易所 `pre_close`；当前全市场 SQLite 筛选和回测统一按 `prod(1+pct_chg/100)-1` 复合 |
 | `vol` / `amount` | 成交量（手，1手=100股）/ 成交额（千元） |
 | `pe_ttm` / `pb` | 滚动市盈率/市净率，工具附带的分位是**近 N 日窗口内**分位，不是历史全样本 |
 | `turnover_rate` | 换手率%（流通股本口径） |
 | `ann_date` / `end_date` | 公告日 / 报告期；financials 按 `ann_date <= as_of` 截断，引用时必须核对 ann_date |
 
-点时纪律：所有工具都按 `as_of` 硬截断，返回内容可放心引用，不存在未来数据；但**不要**试图推断 as_of 之后的任何行情。
+点时纪律：所有工具都按 `as_of` 硬截断。不要混用 `close_qfq` 比值和 `pct_chg`
+复合来拼接同一段收益，也不要跨不同 `as_of` 查询拼接 qfq 价格。
 
 ## 开发/数据准备用法（评测外，需终端）
 
@@ -50,7 +55,10 @@ python run.py trade-cal --start 20240101 --end 20241231                        #
 
 1. 回测/预测场景**必须**传 `--as-of=决策日`：行情/估值/日历按 `trade_date <= as_of` 截断，财务按**公告日** `ann_date <= as_of` 截断。
 2. 引用财务数据时必须核对返回的 `ann_date`；`stock-info` 是当前快照、无点时保证，不得用于历史归因。
-3. 前复权基准 = 窗口末端（as_of 当日）复权因子：窗口内价格可比；不同 as_of 的两次查询结果不可直接拼接。
+3. 前复权基准 = 窗口末端（as_of）复权因子：同一次查询窗口内价格可比；不同
+   `as_of` 的两次查询结果不可直接拼接。
+4. 当前全市场开放池的筛选、市场广度和回放以 SQLite 中 `pct_chg` 复合为唯一收益
+   口径；CLI 的 qfq 价格主要用于人工核验，二者不得混算。
 
 ## 输出格式
 

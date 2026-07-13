@@ -13,6 +13,7 @@ Tables added to data/ashare_pools.db:
     market_daily(ts_code, trade_date, close, pct_chg, vol, amount)
     market_daily_basic(ts_code, trade_date, pe_ttm, pb, turnover_rate,
                        total_mv, circ_mv)
+    etf_daily(ts_code, trade_date, close, pct_chg, vol, amount)
     stock_basic_all(ts_code, name, industry, list_date, delist_date, status)
     fina_cache(ts_code, ann_date, end_date, ...)   -- lazy, per-stock
     fetch_progress(kind, trade_date)               -- resume bookkeeping
@@ -39,6 +40,11 @@ TUSHARE_API = "http://api.tushare.pro"
 
 START_DATE = "20230601"
 END_DATE = "20250731"
+ETF_CORE_CODES = (
+    "510300.SH",  # 沪深300ETF
+    "510500.SH",  # 中证500ETF
+    "512100.SH",  # 中证1000ETF
+)
 
 
 def load_token() -> str:
@@ -96,6 +102,12 @@ def init_tables(conn: sqlite3.Connection) -> None:
             total_mv REAL, circ_mv REAL,
             PRIMARY KEY (ts_code, trade_date)
         );
+        CREATE TABLE IF NOT EXISTS etf_daily (
+            ts_code TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            close REAL, pct_chg REAL, vol REAL, amount REAL,
+            PRIMARY KEY (ts_code, trade_date)
+        );
         CREATE TABLE IF NOT EXISTS stock_basic_all (
             ts_code TEXT PRIMARY KEY,
             name TEXT, industry TEXT, list_date TEXT,
@@ -122,6 +134,8 @@ def init_tables(conn: sqlite3.Connection) -> None:
             ON market_daily(trade_date);
         CREATE INDEX IF NOT EXISTS idx_market_basic_date
             ON market_daily_basic(trade_date);
+        CREATE INDEX IF NOT EXISTS idx_etf_daily_date
+            ON etf_daily(trade_date);
         """
     )
     conn.commit()
@@ -200,6 +214,43 @@ def fetch_by_date(
     conn.commit()
 
 
+def fetch_core_etfs(conn: sqlite3.Connection, token: str) -> None:
+    """Fetch the fixed v4 ETF core with resumable per-code markers."""
+    done = done_dates(conn, "etf_daily")
+    todo = [code for code in ETF_CORE_CODES if code not in done]
+    print(f"etf_daily: {len(todo)} codes to fetch ({len(done)} done)")
+    fields = "ts_code,trade_date,close,pct_chg,vol,amount"
+    columns = ["ts_code", "trade_date", "close", "pct_chg", "vol", "amount"]
+    for code in todo:
+        df = tushare_query(
+            token,
+            "fund_daily",
+            {
+                "ts_code": code,
+                "start_date": START_DATE,
+                "end_date": END_DATE,
+            },
+            fields=fields,
+        )
+        if df.empty:
+            raise RuntimeError(f"fund_daily returned no rows for {code}")
+        df = df[columns].copy()
+        df.to_sql("tmp_etf", conn, if_exists="replace", index=False)
+        conn.execute("INSERT OR REPLACE INTO etf_daily SELECT * FROM tmp_etf")
+        conn.execute(
+            "INSERT OR REPLACE INTO fetch_progress VALUES (?,?)",
+            ("etf_daily", code),
+        )
+        conn.commit()
+        print(
+            f"  etf_daily {code}: {len(df)} rows "
+            f"({df.trade_date.min()}..{df.trade_date.max()})"
+        )
+        time.sleep(0.2)
+    conn.execute("DROP TABLE IF EXISTS tmp_etf")
+    conn.commit()
+
+
 def main() -> None:
     token = load_token()
     conn = sqlite3.connect(DB_PATH)
@@ -208,6 +259,7 @@ def main() -> None:
     init_tables(conn)
 
     fetch_stock_basic(conn, token)
+    fetch_core_etfs(conn, token)
     fetch_by_date(
         conn,
         token,
@@ -235,7 +287,11 @@ def main() -> None:
     nc = conn.execute(
         "SELECT COUNT(DISTINCT ts_code) FROM market_daily"
     ).fetchone()[0]
-    print(f"\nDONE_FULL_MARKET daily={n1} basic={n2} stocks={nc}")
+    ne = conn.execute("SELECT COUNT(*) FROM etf_daily").fetchone()[0]
+    print(
+        f"\nDONE_FULL_MARKET daily={n1} basic={n2} "
+        f"etf_daily={ne} stocks={nc}"
+    )
     conn.close()
 
 

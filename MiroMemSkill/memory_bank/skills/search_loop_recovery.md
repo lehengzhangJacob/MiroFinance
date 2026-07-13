@@ -1,6 +1,10 @@
 ---
 name: search_loop_recovery
 description: 搜索循环自救——N次无进展时收敛策略、避免无限检索
+version: "2.0"
+applies_to: [web_research, document_retrieval, financial_qa]
+stock_universe: not_applicable
+dependencies: [search_tool]
 triggers:
   - 搜索
   - search

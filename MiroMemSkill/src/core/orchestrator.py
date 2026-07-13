@@ -5,6 +5,7 @@
 import asyncio
 import datetime
 import os
+import re
 import sys
 import time
 import uuid
@@ -35,6 +36,7 @@ from src.memory.context import (
 from src.memory.feature_evidence import build_feature_evidence_block
 from src.utils.ashare_trader import (
     canonicalize_core_satellite_answer,
+    canonicalize_fixed_core_answer,
     validate_portfolio_answer,
 )
 
@@ -132,6 +134,15 @@ def _ashare_trader_core_satellite_enabled(
     )
 
 
+def _ashare_trader_fixed_core_enabled(
+    metadata: dict[str, Any] | None,
+) -> bool:
+    if not metadata or metadata.get("task_type") != "portfolio_allocation":
+        return False
+    fixed = metadata.get("fixed_core_weights")
+    return bool(isinstance(fixed, dict) and fixed)
+
+
 def _ashare_trader_mandatory_tool_error(
     metadata: dict[str, Any] | None,
     tools_seen: set[str] | frozenset[str],
@@ -187,6 +198,29 @@ def _replace_or_append_final_boxed(text: str, canonical_boxed: str) -> str:
         start, end = last_span
         return raw[:start] + canonical_boxed + raw[end:]
     return f"{raw}\n{canonical_boxed}" if raw else canonical_boxed
+
+
+def _tool_result_text(value: Any) -> str:
+    """Flatten nested MCP results while preserving newlines inside strings."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(_tool_result_text(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return "\n".join(_tool_result_text(item) for item in value)
+    return ""
+
+
+def _growth_quality_eligible_codes(tool_result: Any) -> list[str]:
+    return sorted(
+        set(
+            re.findall(
+                r"(?m)^(\d{6}\.(?:SH|SZ))\s*\|"
+                r"[^\n]*?\|\s*YES\s*\|",
+                _tool_result_text(tool_result),
+            )
+        )
+    )
 
 
 def _canonicalize_core_satellite_response(
@@ -250,6 +284,42 @@ def _canonicalize_core_satellite_response(
     )
 
 
+def _canonicalize_fixed_core_response(
+    answer: str,
+    metadata: dict[str, Any] | None,
+) -> tuple[str, Any]:
+    """Canonicalize Agent stock identities under a metadata-fixed asset core."""
+    canonical = canonicalize_fixed_core_answer(answer, metadata)
+    if canonical is None:
+        raise ValueError("fixed-core canonicalization was not active")
+    if metadata is None:
+        raise ValueError("fixed-core canonicalization requires task metadata")
+    selection = {
+        "selected_codes": list(canonical.selected_codes),
+        "source": "agent",
+        "diagnostic": canonical.diagnostic,
+    }
+    eligible_raw = metadata.get("growth_quality_eligible_codes")
+    if isinstance(eligible_raw, list):
+        eligible = {
+            str(code).strip().upper() for code in eligible_raw if str(code).strip()
+        }
+        ineligible = [
+            code for code in canonical.selected_codes if code not in eligible
+        ]
+        if ineligible:
+            raise ValueError(
+                "Alpha stocks must be growth-quality hard-filter YES candidates; "
+                f"ineligible={','.join(ineligible)}; "
+                f"eligible={','.join(sorted(eligible)) or 'none'}"
+            )
+    metadata["alpha_selection"] = selection
+    return (
+        _replace_or_append_final_boxed(answer, canonical.canonical_boxed_answer),
+        canonical,
+    )
+
+
 def _validate_ashare_trader_tool_call(
     tool_name: str,
     arguments: Any,
@@ -268,6 +338,20 @@ def _validate_ashare_trader_tool_call(
             f"{tool_name} rejected stock outside the task pool: {ts_code}; "
             "use only a code from the task's allowed stock pool"
         )
+    batch_codes = arguments.get("ts_codes", [])
+    if batch_codes:
+        if not isinstance(batch_codes, list):
+            raise ValueError(f"{tool_name} ts_codes must be a list")
+        outside = [
+            str(code).strip().upper()
+            for code in batch_codes
+            if str(code).strip().upper() not in pool
+        ]
+        if outside:
+            raise ValueError(
+                f"{tool_name} rejected stocks outside the task pool: "
+                + ",".join(outside)
+            )
 
     cutoff = _normalize_ashare_date(
         metadata.get("entry_date") or metadata.get("as_of")
@@ -1248,6 +1332,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
         feature_evidence_attempted = False
         assistant_response_text = ""
         core_satellite_intent_text = ""
+        fixed_core_intent_text = ""
 
         def canonicalize_core_satellite_terminal(answer: str) -> str:
             nonlocal core_satellite_intent_text
@@ -1259,6 +1344,22 @@ Your objective is maximum completeness, transparency, and detailed documentation
             selection = dict((metadata or {}).get("satellite_selection", {}))
             self.task_log.log_step(
                 "trader_core_satellite_canonicalized",
+                canonical.diagnostic,
+                "success",
+                metadata=selection,
+            )
+            return canonical_text
+
+        def canonicalize_fixed_core_terminal(answer: str) -> str:
+            nonlocal fixed_core_intent_text
+            fixed_core_intent_text = answer
+            canonical_text, canonical = _canonicalize_fixed_core_response(
+                answer,
+                metadata,
+            )
+            selection = dict((metadata or {}).get("alpha_selection", {}))
+            self.task_log.log_step(
+                "trader_fixed_core_canonicalized",
                 canonical.diagnostic,
                 "success",
                 metadata=selection,
@@ -1300,7 +1401,26 @@ Your objective is maximum completeness, transparency, and detailed documentation
                                 assistant_response_text
                             )
                         )
-                    break
+                    elif _ashare_trader_fixed_core_enabled(metadata):
+                        mandatory_error = _ashare_trader_mandatory_tool_error(
+                            metadata,
+                            ashare_tools_seen,
+                        )
+                        if mandatory_error:
+                            should_break = False
+                        else:
+                            try:
+                                assistant_response_text = (
+                                    canonicalize_fixed_core_terminal(
+                                        assistant_response_text
+                                    )
+                                )
+                            except ValueError:
+                                # Fall through to the normal repair loop so the
+                                # Agent can provide exactly three valid stocks.
+                                should_break = False
+                    if should_break:
+                        break
             else:
                 # LLM call failed, mark task as failed and end current turn
                 if tool_calls == "context_limit":
@@ -1340,6 +1460,25 @@ Your objective is maximum completeness, transparency, and detailed documentation
                             "System canonicalized the core-satellite allocation."
                         )
                         break
+                elif _ashare_trader_fixed_core_enabled(metadata):
+                    portfolio_error = _ashare_trader_mandatory_tool_error(
+                        metadata,
+                        ashare_tools_seen,
+                    )
+                    if not portfolio_error:
+                        try:
+                            assistant_response_text = (
+                                canonicalize_fixed_core_terminal(
+                                    assistant_response_text or ""
+                                )
+                            )
+                        except ValueError as exc:
+                            portfolio_error = str(exc)
+                        else:
+                            logger.debug(
+                                "System canonicalized the fixed-core allocation."
+                            )
+                            break
                 else:
                     portfolio_error = _ashare_trader_terminal_error(
                         assistant_response_text or "",
@@ -1389,6 +1528,19 @@ Your objective is maximum completeness, transparency, and detailed documentation
                     if min_cash or max_cash < 1.0:
                         constraint_parts.append(
                             f"CASH权重范围={min_cash:.2f}-{max_cash:.2f}"
+                        )
+                    fixed_core = raw_metadata.get("fixed_core_weights")
+                    if isinstance(fixed_core, dict) and fixed_core:
+                        core_text = ",".join(
+                            f"{str(code).upper()}={float(weight):.2f}"
+                            for code, weight in fixed_core.items()
+                        )
+                        constraint_parts.append(f"固定核心不可更改：{core_text}")
+                        constraint_parts.append(
+                            "Alpha股票数量="
+                            f"{int(raw_metadata.get('alpha_count', 0))}，"
+                            "每只权重="
+                            f"{float(raw_metadata.get('alpha_weight', 0.0)):.2f}"
                         )
                     constraint_hint = "；".join(constraint_parts)
                     repair_prompt = (
@@ -1472,6 +1624,21 @@ Your objective is maximum completeness, transparency, and detailed documentation
                             )
                         ):
                             ashare_tools_seen.add(tool_name)
+                            if (
+                                tool_name == "ashare_compare_growth_quality"
+                                and metadata is not None
+                            ):
+                                eligible_codes = set(
+                                    metadata.get(
+                                        "growth_quality_eligible_codes", []
+                                    )
+                                )
+                                eligible_codes.update(
+                                    _growth_quality_eligible_codes(tool_result)
+                                )
+                                metadata["growth_quality_eligible_codes"] = sorted(
+                                    eligible_codes
+                                )
 
                     call_end_time = time.time()
                     call_duration_ms = int((call_end_time - call_start_time) * 1000)
@@ -1810,6 +1977,40 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 "success",
                 metadata=dict((metadata or {}).get("satellite_selection", {})),
             )
+        elif (
+            _ashare_trader_fixed_core_enabled(metadata)
+            and not mandatory_tool_error
+        ):
+            canonicalization_source = fixed_core_intent_text or final_answer_text
+            try:
+                _, canonical = _canonicalize_fixed_core_response(
+                    canonicalization_source,
+                    metadata,
+                )
+            except ValueError as exc:
+                self.task_log.log_step(
+                    "trader_fixed_core_finalized",
+                    f"Could not canonicalize final allocation: {exc}",
+                    "failed",
+                )
+            else:
+                final_answer_text = _replace_or_append_final_boxed(
+                    final_answer_text,
+                    canonical.canonical_boxed_answer,
+                )
+                final_summary, _ = (
+                    self.output_formatter.format_final_summary_and_log(
+                        final_answer_text,
+                        self.llm_client,
+                    )
+                )
+                final_boxed_answer = canonical.canonical_boxed_answer
+                self.task_log.log_step(
+                    "trader_fixed_core_finalized",
+                    "Forced the final boxed answer to the fixed-core allocation",
+                    "success",
+                    metadata=dict((metadata or {}).get("alpha_selection", {})),
+                )
         portfolio_error = _ashare_trader_terminal_error(
             final_boxed_answer,
             metadata,

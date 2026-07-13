@@ -6,7 +6,8 @@
 
 - 直连 `http://api.tushare.pro`，仅依赖 `requests/pandas/pyyaml`（免费旧接口已停止维护，不引入 tushare 包）；
 - 内置 `--as-of` 点时截断：行情按交易日、财务按**公告日**过滤，杜绝回测未来函数；
-- 前复权（qfq）与仓库回测管线同口径：`price * adj_factor / as_of日因子`；
+- CLI 提供前复权（qfq）价格用于单次查询窗口核验；当前全市场 SQLite 筛选与回测
+  统一使用 `pct_chg` 复合收益，两种口径不得混算；
 - 统一 token 解析、限频重试与输出 envelope，agent 与人都能直接用。
 
 ## 目录
@@ -75,7 +76,11 @@ stdout 统一返回 JSON envelope：
 
 1. **行情/估值/日历**：请求端把 `end_date` 压到 `as_of`，返回后再按 `trade_date <= as_of` 二次过滤；
 2. **财务**：`fina_indicator` 的 `end_date` 参数是报告期而非公告日，因此**客户端按 `ann_date <= as_of` 过滤**，并丢弃缺失 `ann_date` 的行；
-3. **前复权**：以窗口末端（as_of）复权因子为基准，窗口内收益率计算正确；不同 as_of 查询结果不可跨窗口拼接。
+3. **前复权**：以窗口末端（as_of）复权因子为基准，同一次查询窗口内价格可比；
+   不同 as_of 查询结果不可跨窗口拼接；
+4. **全市场收益**：开放池 SQLite 管线使用
+   `prod(1 + pct_chg / 100) - 1` 计算窗口收益。`close` 是未复权展示价，
+   `close_qfq` 是 CLI 查询内的复权价，不得与 `pct_chg` 拼接或混算。
 
 ## 测试
 

@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "created_at": "2026-07-13T16:34:25.044315+00:00",
+  "scope": "stocks-only open-universe paired project comparison",
+  "model": {
+    "name": "glm-5.2",
+    "thinking_mode": "enabled",
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "max_tokens": 32000,
+    "keep_tool_result": 6,
+    "max_turns": 24,
+    "max_tool_calls_per_turn": 16
+  },
+  "sources": {
+    "database": "/home/msj_team/Jacob/agent/MiroMemSkill/data/ashare_pools.db",
+    "tasks": "/home/msj_team/Jacob/agent/MiroMemSkill/data/ashare_trader_open/standardized_data.jsonl",
+    "server": "/home/msj_team/Jacob/agent/MiroMemSkill/src/tool/mcp_servers/ashare_open_mcp_server.py",
+    "evaluator": "/home/msj_team/Jacob/agent/MiroMemSkill/scripts/ashare/eval_open_trader.py"
+  },
+  "artifacts": {
+    "database": {
+      "path": "ashare_pools_snapshot.db",
+      "size": 640765952,
+      "sha256": "0149c0f50b987ff0e981269a5f3e367ef0d99b76c4d730a12f4ffa0169a4c37b"
+    },
+    "tasks": {
+      "path": "tasks/ashare_trader_open/standardized_data.jsonl",
+      "size": 790127,
+      "sha256": "d904f96ebf64e7de8c3d186f78b0746855c67f48bdfd06597969a3f031eddd4a"
+    },
+    "server": {
+      "path": "code/ashare_open_mcp_server.py",
+      "size": 35935,
+      "sha256": "6aa0f8ce4a43b42a25267d74a8beaf9fb650ae219e5d8155dede18c313a2c404"
+    },
+    "evaluator": {
+      "path": "code/eval_open_trader.py",
+      "size": 34526,
+      "sha256": "b8fb014805ea743ca37866d5dabe19613527fa27195f2865a33da63220568aa0"
+    }
+  },
+  "database_stats": {
+    "integrity_check": "ok",
+    "etf_daily_rows": 1578,
+    "fina_cache_rows": 1918,
+    "index_daily_rows": 624,
+    "market_daily_rows": 2677427,
+    "market_daily_basic_rows": 2677427,
+    "stock_basic_all_rows": 5534,
+    "trade_cal_rows": 943,
+    "market_daily_codes": 5255,
+    "market_daily_dates": [
+      "20230601",
+      "20250731"
+    ]
+  },
+  "task_stats": {
+    "task_count": 12,
+    "task_ids": [
+      "ashare_open_trader_2024-07-01",
+      "ashare_open_trader_2024-08-01",
+      "ashare_open_trader_2024-09-02",
+      "ashare_open_trader_2024-10-09",
+      "ashare_open_trader_2024-11-06",
+      "ashare_open_trader_2024-12-04",
+      "ashare_open_trader_2025-01-02",
+      "ashare_open_trader_2025-02-07",
+      "ashare_open_trader_2025-03-07",
+      "ashare_open_trader_2025-04-07",
+      "ashare_open_trader_2025-05-08",
+      "ashare_open_trader_2025-06-06"
+    ],
+    "entry_dates": [
+      "20240701",
+      "20240801",
+      "20240902",
+      "20241009",
+      "20241106",
+      "20241204",
+      "20250102",
+      "20250207",
+      "20250307",
+      "20250407",
+      "20250508",
+      "20250606"
+    ],
+    "exit_dates": [
+      "20240729",
+      "20240829",
+      "20241009",
+      "20241106",
+      "20241204",
+      "20250102",
+      "20250207",
+      "20250307",
+      "20250407",
+      "20250508",
+      "20250606",
+      "20250704"
+    ],
+    "pool_sizes": [
+      4821,
+      4825,
+      4831,
+      4834,
+      4843,
+      4850,
+      4854,
+      4870,
+      4868,
+      4883,
+      4892,
+      4895
+    ],
+    "pool_size_min": 4821,
+    "pool_size_max": 4895
+  }
+}

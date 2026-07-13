@@ -69,6 +69,17 @@ class CoreSatelliteCanonicalizationResult:
 
 
 @dataclass(frozen=True)
+class FixedCoreCanonicalizationResult:
+    """Canonical allocation assembled from fixed assets plus Agent stock intent."""
+
+    canonical_boxed_answer: str
+    weights: dict[str, float]
+    cash: float
+    selected_codes: tuple[str, ...]
+    diagnostic: str
+
+
+@dataclass(frozen=True)
 class PortfolioMonthResult:
     starting_capital: float
     ending_capital: float
@@ -505,15 +516,114 @@ def canonicalize_core_satellite_answer(
     )
 
 
+def canonicalize_fixed_core_answer(
+    text: str,
+    metadata: Mapping[str, Any] | None,
+) -> FixedCoreCanonicalizationResult | None:
+    """Assemble a fixed asset core and equal-weight Agent alpha sleeve.
+
+    The Agent controls only the identities of ``alpha_count`` stocks.  Core,
+    alpha, and cash weights are read from task metadata and cannot be changed
+    by the model.
+    """
+    raw = dict(metadata or {})
+    fixed_raw = raw.get("fixed_core_weights")
+    if not isinstance(fixed_raw, Mapping) or not fixed_raw:
+        return None
+
+    stock_pool, stock_set, _ = _canonical_pool(
+        raw.get("stock_pool", [])
+    )
+    fixed_weights: dict[str, float] = {}
+    for raw_code, raw_weight in fixed_raw.items():
+        code = str(raw_code).strip().upper()
+        try:
+            weight = float(raw_weight)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"fixed core has invalid weight for {code}") from exc
+        if (
+            not code
+            or code in fixed_weights
+            or not math.isfinite(weight)
+            or weight <= 0.0
+        ):
+            raise ValueError("fixed core codes and weights must be unique and positive")
+        fixed_weights[code] = weight
+
+    alpha_count = int(raw.get("alpha_count", 0) or 0)
+    alpha_weight = float(raw.get("alpha_weight", 0.0) or 0.0)
+    cash = float(raw.get("cash_weight", 0.0) or 0.0)
+    if alpha_count <= 0 or alpha_weight <= 0.0:
+        raise ValueError("fixed-core policy requires positive alpha_count/alpha_weight")
+    if cash < 0.0 or not math.isfinite(cash):
+        raise ValueError("fixed-core policy requires finite non-negative cash")
+    total = sum(fixed_weights.values()) + alpha_count * alpha_weight + cash
+    if abs(total - 1.0) > WEIGHT_TOLERANCE:
+        raise ValueError(f"fixed-core policy weights must sum to 1, got {total:.8f}")
+
+    asset_pool = [
+        *fixed_weights,
+        *(code for code in stock_pool if code not in fixed_weights),
+    ]
+    _, asset_set, asset_suffix = _canonical_pool(asset_pool)
+    answer_codes, has_outside_pool_code = _answer_code_intent(
+        text,
+        asset_set,
+        asset_suffix,
+    )
+    if has_outside_pool_code:
+        raise ValueError("fixed-core answer contains code(s) outside the asset pool")
+    selected = tuple(code for code in answer_codes if code in stock_set)
+    if len(selected) != alpha_count:
+        raise ValueError(
+            f"fixed-core answer must select exactly {alpha_count} unique "
+            f"alpha stocks; found {len(selected)}"
+        )
+    if any(code in fixed_weights for code in selected):
+        raise ValueError("fixed ETF core cannot be selected as stock alpha")
+
+    weights = {
+        **fixed_weights,
+        **{code: alpha_weight for code in selected},
+    }
+    allocations = [
+        *(f"{code}:{_canonical_weight(weight)}" for code, weight in weights.items()),
+        f"CASH:{_canonical_weight(cash)}",
+    ]
+    canonical_answer = "\\boxed{" + ",".join(allocations) + "}"
+
+    validation_metadata = {
+        **raw,
+        "asset_pool": asset_pool,
+    }
+    validation = validate_portfolio_answer(canonical_answer, validation_metadata)
+    if not validation.ok:
+        raise ValueError(
+            "assembled fixed-core allocation failed validation: "
+            f"{validation.error}"
+        )
+    return FixedCoreCanonicalizationResult(
+        canonical_boxed_answer=canonical_answer,
+        weights=weights,
+        cash=cash,
+        selected_codes=selected,
+        diagnostic=(
+            f"accepted {len(selected)} Agent alpha stocks and enforced "
+            f"{len(fixed_weights)} fixed core assets"
+        ),
+    )
+
+
 def validate_portfolio_answer(
     text: str,
     metadata: Mapping[str, Any] | None,
 ) -> PortfolioValidationResult:
     """Apply syntax, pool, weight, and optional momentum-anchor constraints."""
     raw = dict(metadata or {})
+    valid_pool = raw.get("asset_pool") or raw.get("stock_pool", [])
     parsed = parse_portfolio_weights(
         text,
-        raw.get("stock_pool", []),
+        valid_pool,
         max_stock_weight=float(raw.get("max_stock_weight", 0.25)),
     )
     if not parsed.ok:
@@ -560,6 +670,77 @@ def validate_portfolio_answer(
             constraint_error,
         )
         return PortfolioValidationResult(invalid)
+
+    fixed_raw = raw.get("fixed_core_weights")
+    if isinstance(fixed_raw, Mapping) and fixed_raw:
+        fixed_weights = {
+            str(code).strip().upper(): float(weight)
+            for code, weight in fixed_raw.items()
+        }
+        stock_set = {
+            str(code).strip().upper() for code in raw.get("stock_pool", [])
+        }
+        alpha_count = int(raw.get("alpha_count", 0) or 0)
+        alpha_weight = float(raw.get("alpha_weight", 0.0) or 0.0)
+        expected_cash = float(raw.get("cash_weight", 0.0) or 0.0)
+        fixed_error = ""
+        for code, expected in fixed_weights.items():
+            actual = float(parsed.weights.get(code, 0.0))
+            if abs(actual - expected) > WEIGHT_TOLERANCE:
+                fixed_error = (
+                    f"fixed core {code} weight {actual:.8f} must equal "
+                    f"{expected:.8f}"
+                )
+                break
+        alpha_codes = [
+            code
+            for code, weight in parsed.weights.items()
+            if code not in fixed_weights and weight > WEIGHT_TOLERANCE
+        ]
+        if not fixed_error and any(code not in stock_set for code in alpha_codes):
+            fixed_error = "fixed-core alpha contains a non-stock asset"
+        elif not fixed_error and len(alpha_codes) != alpha_count:
+            fixed_error = (
+                f"fixed-core portfolio must hold exactly {alpha_count} alpha "
+                f"stocks; held {len(alpha_codes)}"
+            )
+        elif not fixed_error and any(
+            abs(float(parsed.weights[code]) - alpha_weight) > WEIGHT_TOLERANCE
+            for code in alpha_codes
+        ):
+            fixed_error = (
+                f"every fixed-core alpha stock must have weight "
+                f"{alpha_weight:.8f}"
+            )
+        elif (
+            not fixed_error
+            and abs(parsed.cash - expected_cash) > WEIGHT_TOLERANCE
+        ):
+            fixed_error = (
+                f"fixed-core CASH weight {parsed.cash:.8f} must equal "
+                f"{expected_cash:.8f}"
+            )
+        eligible_raw = raw.get("growth_quality_eligible_codes")
+        if not fixed_error and isinstance(eligible_raw, list):
+            eligible_set = {
+                str(code).strip().upper()
+                for code in eligible_raw
+                if str(code).strip()
+            }
+            ineligible = [code for code in alpha_codes if code not in eligible_set]
+            if ineligible:
+                fixed_error = (
+                    "alpha stocks failed the growth-quality hard filter: "
+                    + ",".join(ineligible)
+                )
+        if fixed_error:
+            invalid = PortfolioParseResult(
+                parsed.weights,
+                parsed.cash,
+                False,
+                fixed_error,
+            )
+            return PortfolioValidationResult(invalid)
     anchor = validate_anchor_from_metadata(parsed.weights, parsed.cash, raw)
     return PortfolioValidationResult(parsed, anchor)
 

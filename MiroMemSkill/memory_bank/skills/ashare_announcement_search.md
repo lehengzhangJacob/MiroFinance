@@ -1,8 +1,11 @@
 ---
 name: ashare_announcement_search
-description: A股公告与财报检索路径——巨潮资讯、交易所披露、关键指标提取
+description: 允许联网的A股研究任务中检索公告与财报；封闭点时回测禁止使用
+version: "2.0"
+applies_to: [online_ashare_research, announcement_lookup]
+stock_universe: all_ashare
+dependencies: [web_search, browser]
 triggers:
-  - A股
   - 公告
   - 财报
   - 年报
@@ -14,6 +17,9 @@ triggers:
 ---
 
 ## 步骤
+
+仅在任务明确允许联网时使用。若任务要求只能调用本地点时工具、禁止网络搜索，
+不要加载或执行本技能。
 
 1. **确定实体**：股票代码/公司全称/Wind ticker；中文名用全称搜索。
 2. **检索路径**：

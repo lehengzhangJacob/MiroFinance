@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import uuid
@@ -33,6 +34,15 @@ from common_benchmark import (  # noqa: E402
     _build_core_satellite_attribution,
 )
 from scripts.ashare.eval_trader import evaluate_allocations  # noqa: E402
+from scripts.ashare.eval_open_trader import (  # noqa: E402
+    DB_PATH as OPEN_DB_PATH,
+    Market as OpenMarket,
+    _affordable_lot,
+    replay as replay_open,
+)
+from scripts.ashare.gen_open_trader_tasks import (  # noqa: E402
+    build_tasks as build_open_tasks,
+)
 from scripts.ashare.gen_trader_tasks import main as generate_tasks  # noqa: E402
 from src.core.orchestrator import (  # noqa: E402
     MAX_TRADER_PORTFOLIO_REPAIRS,
@@ -40,6 +50,8 @@ from src.core.orchestrator import (  # noqa: E402
     _ashare_trader_portfolio_error,
     _ashare_trader_terminal_error,
     _canonicalize_core_satellite_response,
+    _canonicalize_fixed_core_response,
+    _growth_quality_eligible_codes,
     _is_rate_limit_error,
     _validate_ashare_trader_tool_call,
 )
@@ -54,6 +66,9 @@ from src.tool.mcp_servers.ashare_mcp_server import (  # noqa: E402
     ashare_market_breadth,
     ashare_momentum_baseline,
     ashare_trader_universe_context,
+)
+from src.tool.mcp_servers.ashare_open_mcp_server import (  # noqa: E402
+    ashare_compare_growth_quality,
 )
 from src.utils.ashare_anchor import (  # noqa: E402
     CORE_SATELLITE_SLEEVES,
@@ -72,6 +87,7 @@ from src.utils.ashare_satellite import load_excess_signal_candidates  # noqa: E4
 from src.utils.ashare_trader import (  # noqa: E402
     PortfolioParseResult,
     canonicalize_core_satellite_answer,
+    canonicalize_fixed_core_answer,
     evaluate_portfolio_month,
     parse_portfolio_weights,
     validate_portfolio_answer,
@@ -620,25 +636,28 @@ def test_satellite_signal_pit_and_manifest(tasks: list[dict[str, Any]]) -> None:
     }.intersection(candidate_frame.columns)
 
 
-def test_momentum_anchor_skill(tasks: list[dict[str, Any]]) -> None:
+def test_active_skill_library() -> None:
     previous = os.environ.get("MEMSKILL_EMBEDDING_ENABLED")
     os.environ["MEMSKILL_EMBEDDING_ENABLED"] = "false"
     try:
         skill_lib = SkillLibrary(ROOT / "memory_bank" / "skills_ashare")
+        query = "全A股开放池统一交易员自由选股，决定组合仓位和CASH"
         matches = skill_lib.match(
-            compact_task_query(tasks[0]["task_question"]),
+            query,
             top_k=1,
         )
-        assert matches and matches[0][0].name == "ashare_portfolio_allocation"
+        assert matches and matches[0][0].name == "ashare_open_portfolio"
+        assert skill_lib.get_skill("ashare_portfolio_allocation") is None
         momentum_skill = skill_lib.get_skill("ashare_momentum_relative_strength")
         assert momentum_skill is not None
         assert Path(momentum_skill.path).name == "SKILL.md"
         assert "ashare_momentum_baseline" in momentum_skill.body
+        assert "禁止把 top4 直接变成强制持仓" in momentum_skill.body
 
         with tempfile.TemporaryDirectory() as tmp:
             block = build_memory_context_block(
-                task_description=tasks[0]["task_question"],
-                store=Mem0Memory(InMemoryStore(tmp, "momentum-anchor")),
+                task_description=query,
+                store=Mem0Memory(InMemoryStore(tmp, "open-portfolio")),
                 skill_lib=skill_lib,
                 memory_enabled=False,
                 skill_enabled=True,
@@ -647,10 +666,9 @@ def test_momentum_anchor_skill(tasks: list[dict[str, Any]]) -> None:
                 list_other_skills=False,
             )
         assert "### Top Skill Preview" in block
-        assert "20 日相对动量 top4 硬锚" in block
-        assert "ashare_momentum_baseline" in block
-        assert "ashare_market_breadth" in block
-        assert "不得使用未来数据" in block
+        assert "全A股开放池" in block
+        assert "不设置固定股票" in block
+        assert "动量 top4 硬锚" not in block
     finally:
         if previous is None:
             os.environ.pop("MEMSKILL_EMBEDDING_ENABLED", None)
@@ -1690,6 +1708,155 @@ def test_structured_satellite_attribution_memory() -> None:
         assert secret not in visible
 
 
+def test_v4_etf_growth_policy_and_replay() -> None:
+    tasks = build_open_tasks("v4")
+    assert len(tasks) == 12
+    core = {"510300.SH": 0.20, "510500.SH": 0.20, "512100.SH": 0.20}
+    required = {
+        "ashare_market_breadth",
+        "ashare_index_history",
+        "ashare_screen_market",
+        "ashare_compare_growth_quality",
+    }
+    for task in tasks:
+        metadata = task["metadata"]
+        assert metadata["strategy_version"] == "v4"
+        assert metadata["fixed_core_weights"] == core
+        assert metadata["alpha_count"] == 3
+        assert metadata["alpha_weight"] == 0.10
+        assert metadata["cash_weight"] == 0.10
+        assert set(metadata["required_tools"]) == required
+        assert set(core).issubset(metadata["asset_pool"])
+        assert set(core).isdisjoint(metadata["stock_pool"])
+
+    conn = sqlite3.connect(f"file:{OPEN_DB_PATH}?mode=ro", uri=True)
+    market = OpenMarket(conn)
+    try:
+        for task in tasks:
+            metadata = task["metadata"]
+            for code in core:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM etf_daily WHERE ts_code=? "
+                    "AND trade_date>? AND trade_date<=?",
+                    (
+                        code,
+                        metadata["entry_date"],
+                        metadata["exit_date"],
+                    ),
+                ).fetchone()[0]
+                assert count == metadata["horizon_trading_days"]
+                assert market.asset_entry_close(code, metadata["entry_date"]) > 0
+                assert (
+                    market.asset_window_return(
+                        code,
+                        metadata["entry_date"],
+                        metadata["exit_date"],
+                    )
+                    is not None
+                )
+
+        first = tasks[0]
+        metadata = dict(first["metadata"])
+        alpha = metadata["stock_pool"][:3]
+        metadata["growth_quality_eligible_codes"] = alpha
+        malformed = (
+            "\\boxed{510300.SH:0.99,"
+            + ",".join(f"{code}:0.01" for code in alpha)
+            + ",CASH:0.00}"
+        )
+        canonical = canonicalize_fixed_core_answer(malformed, metadata)
+        assert canonical is not None
+        assert canonical.selected_codes == tuple(alpha)
+        assert canonical.weights == {**core, **{code: 0.10 for code in alpha}}
+        assert canonical.cash == 0.10
+        assert validate_portfolio_answer(
+            canonical.canonical_boxed_answer, metadata
+        ).ok
+
+        canonical_text, audit = _canonicalize_fixed_core_response(
+            malformed, metadata
+        )
+        assert canonical_text.endswith(audit.canonical_boxed_answer)
+        assert metadata["alpha_selection"]["selected_codes"] == alpha
+
+        tampered = canonical.canonical_boxed_answer.replace(
+            "510300.SH:0.20", "510300.SH:0.10"
+        ).replace("CASH:0.10", "CASH:0.20")
+        assert not validate_portfolio_answer(tampered, metadata).ok
+
+        invalid_answers = [
+            f"\\boxed{{{alpha[0]}:0.10,{alpha[0]}:0.10,"
+            f"{alpha[1]}:0.10,CASH:0.70}}",
+            f"\\boxed{{510300.SH:0.10,{alpha[0]}:0.10,"
+            f"{alpha[1]}:0.10,CASH:0.70}}",
+            f"\\boxed{{{alpha[0]}:0.10,{alpha[1]}:0.10,"
+            "999999.SH:0.10,CASH:0.70}",
+        ]
+        for answer in invalid_answers:
+            try:
+                canonicalize_fixed_core_answer(answer, metadata)
+                raise AssertionError("invalid v4 alpha intent was accepted")
+            except ValueError:
+                pass
+
+        ineligible_metadata = {
+            **metadata,
+            "growth_quality_eligible_codes": alpha[:2],
+        }
+        assert not validate_portfolio_answer(
+            canonical.canonical_boxed_answer,
+            ineligible_metadata,
+        ).ok
+        assert "ashare_compare_growth_quality" in _ashare_trader_terminal_error(
+            canonical.canonical_boxed_answer,
+            metadata,
+            required - {"ashare_compare_growth_quality"},
+        )
+        assert (
+            _ashare_trader_terminal_error(
+                canonical.canonical_boxed_answer,
+                metadata,
+                required,
+            )
+            == ""
+        )
+
+        before_announcement = ashare_compare_growth_quality.fn(
+            ["300502.SZ"], "2025-04-22"
+        )
+        on_announcement = ashare_compare_growth_quality.fn(
+            ["300502.SZ"], "2025-04-23"
+        )
+        assert "20250423/20250331" not in before_announcement
+        assert "20250423/20250331" in on_announcement
+        nested_tool_result = {
+            "server_name": "tool-ashare-open",
+            "result": (
+                "代码 | 名称 | 行业 | 合格 | 规则分\n"
+                "002371.SZ | 北方华创 | 半导体 | YES | 8.5\n"
+                "603259.SH | 药明康德 | 医疗保健 | NO | 2.0"
+            ),
+        }
+        assert _growth_quality_eligible_codes(nested_tool_result) == [
+            "002371.SZ"
+        ]
+
+        assert _affordable_lot(10_000.0, 100.0) == (0, 0.0)
+        assert _affordable_lot(10_005.0, 100.0) == (100, 5.0)
+        tiny_allocation = {
+            first["metadata"]["as_of"]: {
+                "510300.SH": 0.001,
+                "CASH": 0.999,
+            }
+        }
+        _, tiny_months = replay_open(market, [first], tiny_allocation)
+        assert tiny_months[0]["holdings"] == 1
+        assert tiny_months[0]["fees"] == 10.0
+        assert tiny_months[0]["effective_cash_w"] > 0.999
+    finally:
+        conn.close()
+
+
 def test_dispatch_and_configs() -> None:
     try:
         create_memory_store(
@@ -1780,6 +1947,16 @@ def test_dispatch_and_configs() -> None:
     assert open_v3.main_agent.llm.temperature == 0.5
     assert open_v3.main_agent.max_turns == 28
 
+    with initialize_config_dir(version_base=None, config_dir=config_dir):
+        open_v4 = compose(config_name="agent_ashare_trader_open_v4_glm")
+    assert open_v4.benchmark.name == "ashare-trader-open"
+    assert open_v4.benchmark.data.data_dir.endswith("ashare_trader_open_v4")
+    assert open_v4.benchmark.anchor_policy.enabled is False
+    assert open_v4.main_agent.llm.model_name == "glm-5.2"
+    assert open_v4.main_agent.llm.temperature == 0.3
+    assert open_v4.main_agent.max_turns == 30
+    assert open_v4.main_agent.output_process.reuse_terminal_response is True
+
     previous = os.environ.get("ASHARE_TRADER_RUN_ID")
     os.environ["ASHARE_TRADER_RUN_ID"] = "smoke-isolated"
     try:
@@ -1811,7 +1988,7 @@ def main() -> None:
     tasks = _load_tasks()
     test_core_satellite_policy_matrix()
     test_core_satellite_intent_canonicalization()
-    test_momentum_anchor_skill(tasks)
+    test_active_skill_library()
     test_tasks_and_panel(tasks)
     test_satellite_signal_pit_and_manifest(tasks)
     test_hard_anchor_and_breadth(tasks)
@@ -1820,10 +1997,12 @@ def main() -> None:
     test_parser_and_finance(tasks)
     test_episode_memory_and_factors(tasks)
     test_structured_satellite_attribution_memory()
+    test_v4_etf_growth_policy_and_replay()
     test_dispatch_and_configs()
     print(
         "[OK] MemSkill ashare-trader: legacy coverage plus exact core-satellite "
-        "sleeves, PIT candidates, canonical intent, and matured factual attribution"
+        "sleeves, v4 fixed ETF core/PIT growth quality, lot replay, and "
+        "matured factual attribution"
     )
 
 

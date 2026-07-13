@@ -1,0 +1,10 @@
+name: "tool-ashare-open"
+tool_command: "python"
+args:
+  - "-m"
+  - "src.tool.mcp_servers.ashare_open_mcp_server"
+env:
+  ASHARE_OPEN_SERVER: "${oc.env:ASHARE_OPEN_SERVER,/home/msj_team/Jacob/agent/MiroMemSkill/src/tool/mcp_servers/ashare_open_mcp_server.py}"
+  ASHARE_OPEN_SERVER_SHA256: "${oc.env:ASHARE_OPEN_SERVER_SHA256,6aa0f8ce4a43b42a25267d74a8beaf9fb650ae219e5d8155dede18c313a2c404}"
+  ASHARE_OPEN_DB: "${oc.env:ASHARE_OPEN_DB,/home/msj_team/Jacob/agent/MiroMemSkill/data/ashare_pools.db}"
+  TUSHARE_TOKEN_FILE: "${oc.env:TUSHARE_TOKEN_FILE,/home/msj_team/Jacob/agent/tushare_token}"

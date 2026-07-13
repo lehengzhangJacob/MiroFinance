@@ -1,6 +1,10 @@
 ---
 name: historical_financial_lookup
 description: 历史金融数据单点查询——权威源优先级、日期核对与单位规范
+version: "2.0"
+applies_to: [historical_financial_lookup, point_in_time_research]
+stock_universe: global_financial_data
+dependencies: [search_tool, document_reader]
 triggers:
   - 历史
   - historical
