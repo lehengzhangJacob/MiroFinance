@@ -1,8 +1,0 @@
-defaults:
-  - ashare-trader
-  - _self_
-
-# Hard-anchor ablation: retain at least 75% in the strict PIT rel20 top4.
-anchor_policy:
-  enabled: true
-  min_top4_weight: 0.75

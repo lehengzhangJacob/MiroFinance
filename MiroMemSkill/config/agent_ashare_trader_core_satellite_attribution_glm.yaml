@@ -1,6 +1,6 @@
 defaults:
-  - benchmark: ashare-trader-anchor60
-  - memory: ashare_trader_attribution
+  - benchmark: ashare-trader-core-satellite
+  - memory: ashare_trader_core_satellite_attribution
   - override hydra/job_logging: none
   - _self_
 
@@ -9,16 +9,18 @@ main_agent:
   generic_task_guidance_enabled: false
   llm:
     provider_class: "GPTOpenAIClient"
-    model_name: "${oc.env:KIMI_MODEL_NAME,kimi-k2.6}"
+    # Pinned to the flagship; .env carries GLM_MODEL_NAME=glm-4.6 so no env lookup.
+    model_name: "glm-5.2"
     async_client: true
     thinking_mode: enabled
     temperature: 1.0
     top_p: 1.0
     min_p: 0.0
     top_k: -1
-    max_tokens: 16000
-    openai_api_key: "${oc.env:KIMI_API_KEY,???}"
-    openai_base_url: "${oc.env:KIMI_BASE_URL,https://api.moonshot.cn/v1}"
+    # GLM-5.2 spends heavily on reasoning tokens before the visible answer.
+    max_tokens: 32000
+    openai_api_key: "${oc.env:GLM_API_KEY,???}"
+    openai_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
     keep_tool_result: 6
     oai_tool_thinking: false
 
@@ -35,12 +37,12 @@ main_agent:
   max_tool_calls_per_turn: 16
   input_process:
     hint_generation: false
-    hint_llm_base_url: "${oc.env:KIMI_BASE_URL,https://api.moonshot.cn/v1}"
+    hint_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
   output_process:
     final_answer_extraction: false
     reuse_terminal_response: true
-    final_answer_llm_base_url: "${oc.env:KIMI_BASE_URL,https://api.moonshot.cn/v1}"
-  openai_api_key: "${oc.env:KIMI_API_KEY,???}"
+    final_answer_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  openai_api_key: "${oc.env:GLM_API_KEY,???}"
   add_message_id: true
   keep_tool_result: 6
   chinese_context: "${oc.env:CHINESE_CONTEXT,true}"

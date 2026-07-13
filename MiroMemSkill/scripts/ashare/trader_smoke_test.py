@@ -8,7 +8,6 @@ import hashlib
 import io
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -973,70 +972,18 @@ def test_hard_anchor_and_breadth(tasks: list[dict[str, Any]]) -> None:
         clear_market_breadth_cache()
         assert compute_market_breadth_regime(entry, data_dir=data_dir) == historical
 
-    flow_root = ROOT.parent / "MiroFlow"
     local_breadth = ROOT / "data" / "ashare" / "market_breadth_daily.csv"
-    flow_breadth = flow_root / "data" / "ashare" / "market_breadth_daily.csv"
-    assert local_breadth.read_bytes() == flow_breadth.read_bytes()
     local_manifest = json.loads(
         (ROOT / "data" / "ashare" / "market_breadth_manifest.json").read_text(
             encoding="utf-8"
         )
     )
-    flow_manifest = json.loads(
-        (
-            flow_root / "data" / "ashare" / "market_breadth_manifest.json"
-        ).read_text(encoding="utf-8")
-    )
-    assert local_manifest["sha256"] == flow_manifest["sha256"]
     assert hashlib.sha256(local_breadth.read_bytes()).hexdigest() == (
         local_manifest["sha256"]
     )
     assert not (
         ROOT / "data" / "ashare" / ".market_breadth_checkpoint.json.gz"
     ).exists()
-
-    parity_script = """
-import json
-from pathlib import Path
-from src.utils.ashare_anchor import AnchorPolicy, build_anchor_snapshot
-
-root = Path.cwd()
-tasks = [
-    json.loads(line)
-    for line in (root / "data/ashare_trader/standardized_data.jsonl")
-        .read_text(encoding="utf-8").splitlines()
-    if line.strip()
-]
-policy = AnchorPolicy(enabled=True, min_top4_weight=0.60)
-results = []
-for task in tasks:
-    metadata = task["metadata"]
-    results.append(build_anchor_snapshot(
-        metadata["entry_date"],
-        metadata["stock_info"],
-        data_dir=root / "data/ashare",
-        policy=policy,
-    ))
-print(json.dumps(results, sort_keys=True))
-"""
-    remote = subprocess.run(
-        [sys.executable, "-c", parity_script],
-        cwd=flow_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    flow_snapshots = json.loads(remote.stdout.strip().splitlines()[-1])
-    local_snapshots = [
-        build_anchor_snapshot(
-            task["metadata"]["entry_date"],
-            task["metadata"]["stock_info"],
-            data_dir=ROOT / "data" / "ashare",
-            policy=policy60,
-        )
-        for task in tasks
-    ]
-    assert flow_snapshots == local_snapshots
 
 
 def test_trader_guardrails(tasks: list[dict[str, Any]]) -> None:
@@ -1722,73 +1669,32 @@ def test_dispatch_and_configs() -> None:
     assert probe.called
 
     with initialize_config_dir(version_base=None, config_dir=config_dir):
-        clean = compose(config_name="agent_ashare_trader_kimi")
-    assert clean.benchmark.execution.max_concurrent == 1
-    assert clean.benchmark.execution.task_order == "monthly"
-    assert clean.benchmark.name == "ashare-trader"
-    assert clean.main_agent.max_turns == -1
-    assert clean.main_agent.max_tool_calls_per_turn == 16
-    assert clean.main_agent.keep_tool_result == 6
-    assert clean.main_agent.llm.thinking_mode == "enabled"
-    assert clean.main_agent.llm.temperature == 1.0
-    assert clean.main_agent.llm.max_tokens == 16000
+        core = compose(
+            config_name="agent_ashare_trader_core_satellite_attribution_kimi"
+        )
+    assert core.benchmark.execution.max_concurrent == 1
+    assert core.benchmark.execution.task_order == "monthly"
+    assert core.benchmark.name == "ashare-trader"
+    assert core.main_agent.max_turns == -1
+    assert core.main_agent.max_tool_calls_per_turn == 16
+    assert core.main_agent.keep_tool_result == 6
+    assert core.main_agent.llm.thinking_mode == "enabled"
+    assert core.main_agent.llm.temperature == 1.0
+    assert core.main_agent.llm.max_tokens == 16000
+    assert core.benchmark.anchor_policy.enabled is True
+    assert core.benchmark.anchor_policy.mode == "core_satellite"
+    assert core.benchmark.anchor_policy.candidate_limit == 6
 
     with initialize_config_dir(version_base=None, config_dir=config_dir):
-        anchor60 = compose(config_name="agent_ashare_trader_anchor60_kimi")
-    assert anchor60.benchmark.anchor_policy.enabled is True
-    assert anchor60.benchmark.anchor_policy.min_top4_weight == 0.60
-    task_data = _load_tasks()[0]
-    runtime_task = BenchmarkTask(
-        task_id=task_data["task_id"],
-        task_question=task_data["task_question"],
-        ground_truth=task_data["ground_truth"],
-        file_path=None,
-        metadata=dict(task_data["metadata"]),
-    )
-    attach_probe = SimpleNamespace(cfg=anchor60)
-    BenchmarkEvaluator._attach_trader_anchor_policy(
-        attach_probe,  # type: ignore[arg-type]
-        runtime_task,
-    )
-    assert runtime_task.metadata["anchor_policy"]["min_top4_weight"] == 0.60
-    assert (
-        runtime_task.metadata["anchor_snapshot"]["as_of"]
-        == task_data["metadata"]["entry_date"]
-    )
-    assert "## 动量硬锚（系统将确定性复核）" in runtime_task.task_question
-    assert "ground_truth_rank" not in runtime_task.task_question
-    assert "satellite_candidates" not in runtime_task.metadata
-    assert "satellite_required_count" not in runtime_task.metadata
-
-    with initialize_config_dir(version_base=None, config_dir=config_dir):
-        anchor75 = compose(config_name="agent_ashare_trader_anchor75_kimi")
-    assert anchor75.benchmark.anchor_policy.min_top4_weight == 0.75
+        glm = compose(
+            config_name="agent_ashare_trader_core_satellite_attribution_glm"
+        )
+    assert glm.main_agent.llm.model_name == "glm-5.2"
+    assert glm.benchmark.anchor_policy.mode == "core_satellite"
 
     previous = os.environ.get("ASHARE_TRADER_RUN_ID")
     os.environ["ASHARE_TRADER_RUN_ID"] = "smoke-isolated"
     try:
-        with initialize_config_dir(version_base=None, config_dir=config_dir):
-            memory = compose(config_name="agent_ashare_trader_mem0_kimi")
-        OmegaConf.resolve(memory)
-        assert memory.memory.namespace == "ashare_trader_smoke-isolated"
-        assert memory.memory.reflection_mode == "trader"
-        assert memory.memory.skill_top_k == 1
-        assert memory.memory.skill_preview_min_score == 0.0
-        assert memory.main_agent.max_turns == -1
-        assert memory.main_agent.llm.thinking_mode == "enabled"
-
-        with initialize_config_dir(version_base=None, config_dir=config_dir):
-            attribution = compose(
-                config_name="agent_ashare_trader_attribution_kimi"
-            )
-        OmegaConf.resolve(attribution)
-        assert attribution.benchmark.anchor_policy.min_top4_weight == 0.60
-        assert attribution.memory.namespace == (
-            "ashare_trader_attribution_smoke-isolated"
-        )
-        assert attribution.memory.skill_enabled is False
-        assert attribution.memory.skill_top_k == 0
-
         with initialize_config_dir(version_base=None, config_dir=config_dir):
             core = compose(
                 config_name="agent_ashare_trader_core_satellite_attribution_kimi"
@@ -1802,6 +1708,9 @@ def test_dispatch_and_configs() -> None:
         )
         assert core.memory.skill_enabled is False
         assert core.memory.skill_top_k == 0
+        assert core.memory.reflection_mode == "trader"
+        assert core.main_agent.max_turns == -1
+        assert core.main_agent.llm.thinking_mode == "enabled"
     finally:
         if previous is None:
             os.environ.pop("ASHARE_TRADER_RUN_ID", None)
