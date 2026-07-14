@@ -1,0 +1,17 @@
+# Pool-v4 rerun (16 stocks, ~50/50 labels). Fresh namespace: earlier banks
+# (ashare_v3..v7) were built on the 12-stock pool / other protocols and their
+# lessons reference answers to overlapping tasks.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_poolv4"
+inject_top_k: 3
+skill_top_k: 3
+skill_enabled: true
+reflection_enabled: true
+embedding_model: "embedding-3"
+inject_enabled: true
+dedupe_threshold: 0.8
+skill_preview_min_score: 2.0

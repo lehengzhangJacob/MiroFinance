@@ -1,0 +1,36 @@
+{
+  "fetched_at": "2026-07-08T22:41:51",
+  "start_date": "20230101",
+  "end_date": "20250731",
+  "index_code": "000300.SH",
+  "stock_pool": {
+    "603259.SH": {
+      "name": "药明康德",
+      "industry": "医药外包"
+    },
+    "000002.SZ": {
+      "name": "万科A",
+      "industry": "房地产"
+    },
+    "300012.SZ": {
+      "name": "华测检测",
+      "industry": "检测服务"
+    },
+    "601899.SH": {
+      "name": "紫金矿业",
+      "industry": "有色金属"
+    },
+    "601138.SH": {
+      "name": "工业富联",
+      "industry": "AI服务器"
+    },
+    "688169.SH": {
+      "name": "石头科技",
+      "industry": "智能清洁电器"
+    }
+  },
+  "optional_datasets": {
+    "daily_basic": true,
+    "fina_indicator": true
+  }
+}

@@ -1,0 +1,17 @@
+# Memory & skill module configuration (MiroMemSkill)
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills"
+namespace: "default"
+inject_top_k: 3
+skill_top_k: 2
+skill_enabled: true
+reflection_enabled: true
+embedding_model: "embedding-3"
+inject_enabled: true
+dedupe_threshold: 0.8
+# >= one trigger hit required before pasting a full skill body (prevents
+# false-positive previews like fx_rounding firing on unrelated tasks).
+skill_preview_min_score: 2.0

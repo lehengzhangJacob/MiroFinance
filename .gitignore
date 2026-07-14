@@ -28,6 +28,23 @@ MiroMemSkill/logs/
 # Packaged-skill run artifacts (qlib_skill outputs etc.)
 MiroMemSkill/memory_bank/skills_ashare/*/outputs/
 
+# MiroMemSkill_hermes fork: same runtime exclusions plus evolution run artifacts
+# (.evolution/registry.json, candidates/, backups/ stay tracked for lineage)
+!MiroMemSkill_hermes/.env.template
+MiroMemSkill_hermes/memory_bank/*.jsonl
+MiroMemSkill_hermes/memory_bank/*.bak*
+MiroMemSkill_hermes/memory_bank/*.lock
+MiroMemSkill_hermes/memory_bank/*.db
+MiroMemSkill_hermes/memory_bank/*.db-*
+MiroMemSkill_hermes/memory_bank/mem0_qdrant/
+MiroMemSkill_hermes/.memory_archives/
+MiroMemSkill_hermes/.runtime/
+MiroMemSkill_hermes/logs/
+MiroMemSkill_hermes/memory_bank/skills_ashare/*/outputs/
+MiroMemSkill_hermes/.evolution/runs/
+MiroMemSkill_hermes/.evolution/nohup/
+MiroMemSkill_hermes/.ruff_cache/
+
 # External reference clones / separate remotes (do not nest in MiroFinance)
 Mem0/
 # report/ tracked in-repo (midterm plan, ACL templates)
@@ -55,3 +72,4 @@ MiroFlow/.venv/
 # Large A-share snapshot DBs (fetch via shared/.../download_assets.sh + GitHub Release)
 shared/ashare_open_stocks_glm52_20260714/*.db
 shared/ashare_open_stocks_glm52_20260714/arms/**/*.db
+MiroMemSkill_hermes/.evolution/.registry.lock

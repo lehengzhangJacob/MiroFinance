@@ -1,0 +1,9 @@
+defaults:
+  - ashare-trader
+  - _self_
+
+# Fixed core + prediction-satellite policy with a bounded Agent choice set.
+anchor_policy:
+  enabled: true
+  mode: core_satellite
+  candidate_limit: 6

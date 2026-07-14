@@ -1,0 +1,12 @@
+name: "tool-memskill"
+tool_command: "python"
+args:
+  - "-m"
+  - "src.tool.mcp_servers.memskill_mcp_server"
+env:
+  MEMSKILL_STORE_DIR: "memory_bank"
+  MEMSKILL_NAMESPACE: "ashare_v5"
+  MEMSKILL_SKILLS_DIR: "memory_bank/skills_ashare"
+  MEMSKILL_EMBEDDING_ENABLED: "${oc.env:MEMSKILL_EMBEDDING_ENABLED,true}"
+  GLM_API_KEY: "${oc.env:GLM_API_KEY,}"
+  GLM_BASE_URL: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"

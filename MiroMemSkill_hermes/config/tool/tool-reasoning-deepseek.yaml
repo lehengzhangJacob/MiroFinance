@@ -1,0 +1,11 @@
+name: "tool-reasoning-deepseek"
+tool_command: "python"
+args:
+  - "-m"
+  - "src.tool.mcp_servers.reasoning_mcp_server"
+env:
+# DeepSeek v4-pro used for the pure-text reasoning tool.
+# reasoning_mcp_server prefers the OpenAI path when OPENAI_API_KEY is set.
+  OPENAI_API_KEY: "${oc.env:DEEPSEEK_API_KEY}"
+  OPENAI_BASE_URL: "${oc.env:DEEPSEEK_BASE_URL,https://api.deepseek.com/v1}"
+  OPENAI_MODEL_NAME: "${oc.env:DEEPSEEK_MODEL_NAME,deepseek-v4-pro}"

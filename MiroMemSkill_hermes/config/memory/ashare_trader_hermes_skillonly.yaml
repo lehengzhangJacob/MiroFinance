@@ -1,0 +1,34 @@
+# Skill-evolution arm: one materialized skill, full-body injection, zero memory.
+#
+# Every knob that could write to or read from run-to-run state is off so paired
+# baseline/candidate arms differ ONLY in the injected skill text. The controller
+# points HERMES_SKILLS_DIR at a per-candidate materialized snapshot directory
+# and HERMES_STORE_DIR at a run-scoped scratch dir.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "${oc.env:HERMES_STORE_DIR,memory_bank}"
+skills_dir: "${oc.env:HERMES_SKILLS_DIR,memory_bank/skills_ashare}"
+
+# Namespace is still run-scoped for defense in depth even though nothing writes.
+namespace: "ashare_hermes_${oc.env:ASHARE_TRADER_RUN_ID}"
+
+# No semantic memory injection, no episodes, no reflection, no outcome logging.
+inject_top_k: 0
+inject_enabled: false
+calibration_enabled: false
+calibration_mode: "off"
+reflection_enabled: false
+reflection_mode: "none"
+outcome_logging_enabled: false
+feature_evidence_enabled: false
+expose_memory_search: "never"
+expose_memory_save: false
+
+# Skill injection: top-1 match, always paste the FULL body (max_chars <= 0).
+skill_top_k: 1
+skill_enabled: true
+skill_preview_min_score: 0.0
+skill_preview_max_chars: 0
+skill_list_others: false
+embedding_model: "embedding-3"

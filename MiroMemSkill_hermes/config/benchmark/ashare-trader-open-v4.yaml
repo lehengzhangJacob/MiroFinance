@@ -1,0 +1,25 @@
+# Monthly whole-A-share trader benchmark, v4:
+# fixed tradable ETF core plus three growth/quality Agent alpha stocks.
+defaults:
+  - default
+  - _self_
+
+name: "ashare-trader-open"
+
+data:
+  data_dir: "${data_dir}/ashare_trader_open_v4"
+  metadata_file: "standardized_data.jsonl"
+  whitelist: []
+
+execution:
+  max_tasks: null
+  max_concurrent: 1
+  pass_at_k: 1
+  task_order: monthly
+
+# v4 fixed-core constraints are embedded in each task's metadata.
+anchor_policy:
+  enabled: false
+  mode: legacy
+
+openai_api_key: "${oc.env:OPENAI_API_KEY,unused-for-deterministic-trader-judge}"

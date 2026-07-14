@@ -1,0 +1,14 @@
+data_dir: "../../../data/ashare"
+
+defaults:
+  window: 20
+  top_k: 4
+  max_stock_weight: 0.25
+  format: json
+
+valid_windows:
+  - 5
+  - 20
+  - 60
+  - 120
+  - 250

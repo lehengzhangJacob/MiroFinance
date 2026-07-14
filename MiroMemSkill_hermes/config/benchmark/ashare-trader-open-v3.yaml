@@ -1,0 +1,25 @@
+# Monthly whole-A-share trader benchmark, v3:
+# breadth-aware exposure bands plus diversified value/quality core and satellites.
+defaults:
+  - default
+  - _self_
+
+name: "ashare-trader-open"
+
+data:
+  data_dir: "${data_dir}/ashare_trader_open_v3"
+  metadata_file: "standardized_data.jsonl"
+  whitelist: []
+
+execution:
+  max_tasks: null
+  max_concurrent: 1
+  pass_at_k: 1
+  task_order: monthly
+
+# The v3 constraints live in each task's metadata; no legacy momentum anchor.
+anchor_policy:
+  enabled: false
+  mode: legacy
+
+openai_api_key: "${oc.env:OPENAI_API_KEY,unused-for-deterministic-trader-judge}"

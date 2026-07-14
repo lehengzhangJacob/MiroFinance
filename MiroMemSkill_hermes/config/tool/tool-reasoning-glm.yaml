@@ -1,0 +1,11 @@
+name: "tool-reasoning-glm"
+tool_command: "python"
+args:
+  - "-m"
+  - "src.tool.mcp_servers.reasoning_mcp_server"
+env:
+# GLM (domestic endpoint) used for the pure-text reasoning tool.
+# reasoning_mcp_server prefers the OpenAI path when OPENAI_API_KEY is set.
+  OPENAI_API_KEY: "${oc.env:GLM_API_KEY}"
+  OPENAI_BASE_URL: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  OPENAI_MODEL_NAME: "${oc.env:GLM_MODEL_NAME,glm-4.6}"

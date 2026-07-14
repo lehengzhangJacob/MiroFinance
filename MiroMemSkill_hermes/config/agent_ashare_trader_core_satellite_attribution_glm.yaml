@@ -1,0 +1,52 @@
+defaults:
+  - benchmark: ashare-trader-core-satellite
+  - memory: ashare_trader_core_satellite_attribution
+  - override hydra/job_logging: none
+  - _self_
+
+main_agent:
+  prompt_class: MainAgentPromptBoxedDeepSeek
+  generic_task_guidance_enabled: false
+  llm:
+    provider_class: "GPTOpenAIClient"
+    # Pinned to the flagship; .env carries GLM_MODEL_NAME=glm-4.6 so no env lookup.
+    model_name: "glm-5.2"
+    async_client: true
+    thinking_mode: enabled
+    temperature: 1.0
+    top_p: 1.0
+    min_p: 0.0
+    top_k: -1
+    # GLM-5.2 spends heavily on reasoning tokens before the visible answer.
+    max_tokens: 32000
+    openai_api_key: "${oc.env:GLM_API_KEY,???}"
+    openai_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+    keep_tool_result: 6
+    oai_tool_thinking: false
+
+  tool_config:
+    - tool-ashare
+    - tool-memskill-ashare-trader
+  tool_blacklist:
+    - ["tool-memskill", "skill_list"]
+    - ["tool-memskill", "skill_load"]
+    - ["tool-memskill", "memory_search"]
+    - ["tool-memskill", "memory_save"]
+
+  max_turns: -1
+  max_tool_calls_per_turn: 16
+  input_process:
+    hint_generation: false
+    hint_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  output_process:
+    final_answer_extraction: false
+    reuse_terminal_response: true
+    final_answer_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  openai_api_key: "${oc.env:GLM_API_KEY,???}"
+  add_message_id: true
+  keep_tool_result: 6
+  chinese_context: "${oc.env:CHINESE_CONTEXT,true}"
+
+sub_agents: null
+output_dir: logs/
+data_dir: "${oc.env:DATA_DIR,data}"

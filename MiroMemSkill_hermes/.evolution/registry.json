@@ -1,0 +1,86 @@
+{
+  "skill_name": "ashare_open_portfolio",
+  "skill_rel_path": "memory_bank/skills_ashare/ashare_open_portfolio.md",
+  "baseline_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+  "active_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+  "created_at": "2026-07-14T14:16:10+00:00",
+  "candidates": {
+    "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7": {
+      "digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+      "short_id": "0a931278001c",
+      "name": "ashare_open_portfolio",
+      "parent_digest": null,
+      "generator": "baseline",
+      "rationale": "",
+      "status": "baseline",
+      "created_at": "2026-07-14T14:16:10+00:00",
+      "reports": {}
+    },
+    "f2a6ed947995494f9210d68de82f63b7fb6fc7a7311fc30d90684da249baa5a2": {
+      "digest": "f2a6ed947995494f9210d68de82f63b7fb6fc7a7311fc30d90684da249baa5a2",
+      "short_id": "f2a6ed947995",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/smoke_20260714_221703/arms/baseline/out (probe)",
+      "status": "probed",
+      "created_at": "2026-07-14T14:25:04+00:00",
+      "reports": {
+        "fitness_probe": {
+          "at": "2026-07-14T14:31:44+00:00",
+          "level": "probe",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/smoke_20260714_221703/arms/baseline/out",
+            "total_return": -0.128916,
+            "index_return": -0.065507,
+            "excess_return": -0.063409,
+            "max_drawdown": -0.128916,
+            "worst_month": -0.109464,
+            "win_rate": 0.0,
+            "fees": 2550.16,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/smoke_20260714_221703/arms/candidate/out",
+            "total_return": -0.080821,
+            "index_return": -0.065507,
+            "excess_return": -0.015314,
+            "max_drawdown": -0.080821,
+            "worst_month": -0.042455,
+            "win_rate": 0.0,
+            "fees": 2531.1,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2024-07-01",
+              "2024-08-01"
+            ],
+            "diffs_pp": [
+              -2.0611,
+              6.9396
+            ],
+            "mean_diff_pp": 2.4393,
+            "stdev_diff_pp": 6.3645,
+            "wins": 1,
+            "losses": 1,
+            "ties": 0,
+            "sign_test_p": 1.0
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": 2.4393,
+          "run_id": "smoke_20260714_221703",
+          "months": [
+            "2024-07-01",
+            "2024-08-01"
+          ]
+        }
+      }
+    }
+  },
+  "holdout_leases": {},
+  "promotions": []
+}

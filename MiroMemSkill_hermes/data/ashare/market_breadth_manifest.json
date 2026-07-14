@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "source": "Tushare Pro daily queried by historical trade_date",
+  "api": "daily",
+  "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "pre_close",
+    "pct_chg"
+  ],
+  "start_date": "20230101",
+  "end_date": "20250731",
+  "row_count": 624,
+  "last_trade_date": "20250731",
+  "generated_at": "2026-07-12T14:38:40",
+  "sha256": "25df62e85e7ddb8b359c51db88006f7603568d8abdb1abb4ca95d44f7c7f0028",
+  "method": "Per-date traded A shares; synthetic prices compounded from pct_chg; MA/return breadth uses only observations available through each date."
+}

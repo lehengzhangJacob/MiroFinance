@@ -1,0 +1,34 @@
+# Open-universe trader memory: factual portfolio episodes plus one matched skill.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+
+# One namespace is shared only by the 12 months of this run.
+namespace: "ashare_trader_open_${oc.env:ASHARE_TRADER_RUN_ID}"
+
+# Generic semantic lessons stay disabled. Trader episodes use a dedicated,
+# deterministic renderer and are visible only after their exit date matures.
+inject_top_k: 0
+inject_enabled: false
+skill_top_k: 1
+skill_enabled: true
+skill_preview_min_score: 0.0
+skill_list_others: false
+
+calibration_enabled: false
+calibration_mode: "off"
+reflection_enabled: true
+reflection_mode: "trader"
+rank_factor_min_months: 3
+rank_factor_fdr_q: 0.10
+rank_factor_status_enabled: false
+trader_episode_max: 3
+trader_episode_notional: 1000000
+
+outcome_logging_enabled: false
+feature_evidence_enabled: false
+expose_memory_search: "never"
+expose_memory_save: false
+embedding_model: "embedding-3"

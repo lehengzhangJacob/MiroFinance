@@ -1,0 +1,8 @@
+name: "tool-ashare-open"
+tool_command: "python"
+args:
+  - "-m"
+  - "src.tool.mcp_servers.ashare_open_mcp_server"
+env:
+  ASHARE_OPEN_DB: "${oc.env:ASHARE_OPEN_DB,data/ashare_pools.db}"
+  TUSHARE_TOKEN_FILE: "${oc.env:TUSHARE_TOKEN_FILE,../tushare_token}"
