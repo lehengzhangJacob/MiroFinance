@@ -1,0 +1,19 @@
+{
+  "release_tag": "ashare-open-20260714",
+  "repo": "lehengzhangJacob/MiroFinance",
+  "note": "Large DBs are GitHub Release assets (not Git LFS) to stay within free quota.",
+  "assets": [
+    {
+      "release_name": "ashare_pools_snapshot.db",
+      "path": "ashare_pools_snapshot.db",
+      "size": 640765952,
+      "sha256": "0149c0f50b987ff0e981269a5f3e367ef0d99b76c4d730a12f4ffa0169a4c37b"
+    },
+    {
+      "release_name": "miromemskill_memfix02_full.db",
+      "path": "arms/20260714_memfix02_full/miromemskill.db",
+      "size": 640942080,
+      "sha256": "7f55f7bbbc6d3a36ec2ca84853fd50a2b653904dd1ae6bba61f3bcc11635c62f"
+    }
+  ]
+}

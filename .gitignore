@@ -51,3 +51,7 @@ venv/
 # MiroFlow runtime artifacts (see also MiroFlow/.gitignore)
 MiroFlow/logs/
 MiroFlow/.venv/
+
+# Large A-share snapshot DBs (fetch via shared/.../download_assets.sh + GitHub Release)
+shared/ashare_open_stocks_glm52_20260714/*.db
+shared/ashare_open_stocks_glm52_20260714/arms/**/*.db

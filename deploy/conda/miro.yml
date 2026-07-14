@@ -4,6 +4,7 @@ channels:
 dependencies:
   - python=3.12
   - pip
+  - git-lfs
   # Required by MoviePy already present in the MiroFlow dependency set.
   - decorator
   - imageio
