@@ -46,6 +46,32 @@ def test_splits_reject_short_task_lists():
         make_splits(make_tasks(MONTHS_12[:5]))
 
 
+MONTHS_24 = MONTHS_12 + [
+    "2025-07-04",
+    "2025-08-01",
+    "2025-09-01",
+    "2025-10-09",
+    "2025-11-04",
+    "2025-12-02",
+    "2026-01-05",
+    "2026-02-03",
+    "2026-03-04",
+    "2026-04-01",
+    "2026-05-06",
+    "2026-06-03",
+]
+
+
+def test_splits_24_months_12_6_6():
+    tasks = make_tasks(MONTHS_24)
+    splits = make_splits(tasks, train_months=12, dev_months=6, holdout_months=6)
+    assert splits.train == tuple(MONTHS_24[:12])
+    assert splits.dev == tuple(MONTHS_24[12:18])
+    assert splits.holdout == tuple(MONTHS_24[18:])
+    assert splits.level_months("probe") == tuple(MONTHS_24[:2])
+    assert len(set(splits.train) | set(splits.dev) | set(splits.holdout)) == 24
+
+
 def test_write_task_subset_layout(tmp_path):
     tasks = make_tasks(MONTHS_12)
     out = write_task_subset(tasks, tuple(MONTHS_12[:2]), tmp_path / "data")

@@ -8,6 +8,7 @@ Typical flow (all paths relative to the fork root)::
 
     python scripts/ashare/run_skill_evolution.py init
     python scripts/ashare/run_skill_evolution.py smoke            # probe loop
+    python scripts/ashare/run_skill_evolution.py full             # train->dev->holdout
     python scripts/ashare/run_skill_evolution.py status
     python scripts/ashare/run_skill_evolution.py holdout --candidate=<short_id>
     python scripts/ashare/run_skill_evolution.py promote --candidate=<short_id>
@@ -55,6 +56,9 @@ class EvolutionCLI:
         config: str = DEFAULT_CONFIG,
         skill: str = DEFAULT_SKILL,
         python_exe: str = sys.executable,
+        train_months: int = 6,
+        dev_months: int = 3,
+        holdout_months: int = 3,
     ):
         self._registry = SkillRegistry(REPO_ROOT, skill)
         self._controller = EvolutionController(
@@ -62,6 +66,9 @@ class EvolutionCLI:
             snapshot_dir=snapshot,
             config_name=config,
             python_exe=python_exe,
+            train_months=train_months,
+            dev_months=dev_months,
+            holdout_months=holdout_months,
         )
         for key, value in _load_key_file(REPO_ROOT.parent / "llm_key").items():
             os.environ.setdefault(key, value)
@@ -210,6 +217,89 @@ class EvolutionCLI:
         report = self.evaluate(run_id, chosen, level=level)
         print(f"=== smoke run {run_id} complete ===")
         return {"run_id": run_id, "candidate": chosen, "score": report["score"]}
+
+    # --------------------------------------------------------------- full
+
+    def full(
+        self,
+        run_id: str = "",
+        n: int = 1,
+        cleanup_db: bool = True,
+        promote_best: bool = False,
+    ):
+        """Full fidelity loop: train(6) -> propose -> dev(3) rank -> holdout(3) best."""
+        run_id = run_id or f"full_{_now_tag()}"
+        print(f"=== full run {run_id} (n={n}) ===")
+
+        baseline_train_out = self.run_arm(
+            run_id,
+            "baseline_train",
+            candidate="baseline",
+            level="train",
+            cleanup_db=cleanup_db,
+        )
+        short_ids = self.propose(
+            feedback_arm=baseline_train_out, level="train", n=n
+        )
+        if not short_ids:
+            raise RuntimeError("no candidate survived L0 gates after train propose")
+
+        self.run_arm(
+            run_id,
+            "baseline_dev",
+            candidate="baseline",
+            level="dev",
+            cleanup_db=cleanup_db,
+        )
+
+        dev_results: list[tuple[str, dict]] = []
+        for sid in short_ids:
+            arm = f"candidate_dev_{sid}"
+            print(f"=== dev candidate {sid} ===")
+            self.run_arm(
+                run_id, arm, candidate=sid, level="dev", cleanup_db=cleanup_db
+            )
+            report = self.evaluate(
+                run_id,
+                sid,
+                baseline_arm="baseline_dev",
+                candidate_arm=arm,
+                level="dev",
+            )
+            dev_results.append((sid, report))
+
+        survivors = [(s, r) for s, r in dev_results if r["gates"]["passed"]]
+        if not survivors:
+            print("=== full run aborted: no candidate passed dev gates ===")
+            return {
+                "run_id": run_id,
+                "status": "dev_all_failed",
+                "candidates": short_ids,
+                "dev_results": {s: r["score"] for s, r in dev_results},
+            }
+
+        best_sid, best_dev = max(survivors, key=lambda x: x[1]["score"])
+        print(
+            f"=== holdout best={best_sid} "
+            f"(dev score={best_dev['score']:+.4f}, "
+            f"mean_paired={best_dev['paired']['mean_diff_pp']:+.2f}pp) ==="
+        )
+        holdout_report = self.holdout(best_sid, run_id=run_id, cleanup_db=cleanup_db)
+
+        result = {
+            "run_id": run_id,
+            "status": "complete",
+            "candidates": short_ids,
+            "best": best_sid,
+            "dev_score": best_dev["score"],
+            "holdout_score": holdout_report["score"],
+            "holdout_gates": holdout_report["gates"]["passed"],
+        }
+        if promote_best and holdout_report["gates"]["passed"]:
+            result["promotion"] = self.promote(best_sid, run_id=run_id)
+        print(f"=== full run {run_id} complete ===")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return result
 
     # ------------------------------------------------------------ sealed
 

@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
 """Generate monthly OPEN-UNIVERSE A-share trader tasks (whole market).
 
-Reuses the exact 12 monthly windows of the legacy 16-stock trader benchmark
-(entry/exit dates, fees, horizon) but removes the hand-picked pool: the agent
-may buy ANY stock that actually traded at the entry close, is not currently
-named ST/退, and was not already delisted at entry.  That tradable set
-(~5,000 codes) is embedded in task metadata as stock_pool so the framework's
-deterministic judge and the repair loop keep working unchanged.
+Default mode reuses the exact 12 monthly windows of the legacy 16-stock
+trader benchmark (entry/exit dates, fees, horizon).  With ``--months
+START:END`` (e.g. ``2024-07:2026-06``) the monthly windows are synthesized
+directly from the mirror's trade calendar and CSI300 closes using the same
+rules as the legacy generator:
+
+- planned entry = first trading session of the month;
+- a single cash account cannot fund overlapping 20-session portfolios, so
+  entry = max(planned entry, previous exit) and must stay in the month;
+- exit = entry + 20 trading sessions; index_return over [entry, exit] closes.
+
+Months that overlap the legacy benchmark are parity-checked against the
+legacy task file (entry/exit/index_return must match exactly) so the
+extended benchmark is a strict superset of the frozen 12-month one.
+
+The agent may buy ANY stock that actually traded at the entry close, is not
+currently named ST/退, and was not already delisted at entry.  That tradable
+set (~5,000 codes) is embedded in task metadata as stock_pool so the
+framework's deterministic judge and the repair loop keep working unchanged.
 
 Known PIT caveat: stock_basic names are current (2026) names, so the ST flag
 is not historical; this slightly over- and under-excludes a few names in both
@@ -198,21 +211,191 @@ def market_breadth_regime(
     return positive_share * 100.0, regime
 
 
-def build_tasks(version: str = DEFAULT_VERSION) -> list[dict[str, Any]]:
-    if version not in QUESTION_TEMPLATES:
-        raise ValueError(f"unsupported strategy version: {version}")
-    question_template = QUESTION_TEMPLATES[version]
+def month_sequence(start_month: str, end_month: str) -> list[str]:
+    """Inclusive list of YYYY-MM months."""
+    sy, sm = int(start_month[:4]), int(start_month[5:7])
+    ey, em = int(end_month[:4]), int(end_month[5:7])
+    if (sy, sm) > (ey, em):
+        raise ValueError(f"bad month range {start_month}:{end_month}")
+    months = []
+    y, m = sy, sm
+    while (y, m) <= (ey, em):
+        months.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    return months
+
+
+def synthesize_windows(
+    conn: sqlite3.Connection,
+    start_month: str,
+    end_month: str,
+    horizon: int = 20,
+    index_code: str = "000300.SH",
+) -> list[dict[str, Any]]:
+    """Build chained monthly windows from trade_cal + index_daily.
+
+    Same rules as the legacy generator: planned entry = first session of the
+    month; entry = max(planned, previous exit) and must stay in the month;
+    exit = entry + ``horizon`` sessions; index return over entry/exit closes.
+    """
+    cal = [
+        d
+        for (d,) in conn.execute(
+            "SELECT cal_date FROM trade_cal WHERE is_open=1 ORDER BY cal_date"
+        )
+    ]
+    pos = {d: i for i, d in enumerate(cal)}
+    idx_close = {
+        d: float(c)
+        for d, c in conn.execute(
+            "SELECT trade_date, close FROM index_daily WHERE ts_code=?",
+            (index_code,),
+        )
+    }
+    first_by_month: dict[str, str] = {}
+    for d in cal:
+        first_by_month.setdefault(f"{d[:4]}-{d[4:6]}", d)
+
+    windows: list[dict[str, Any]] = []
+    previous_exit = ""
+    for month in month_sequence(start_month, end_month):
+        planned = first_by_month.get(month)
+        if planned is None:
+            raise ValueError(f"no trading sessions in month {month}")
+        day = max(planned, previous_exit)
+        if day[:6] != planned[:6]:
+            raise ValueError(
+                f"20-session schedule drifted outside month: {planned} -> {day}"
+            )
+        if day not in pos:
+            raise ValueError(f"entry {day} is not a trading session")
+        exit_i = pos[day] + horizon
+        if exit_i >= len(cal):
+            raise ValueError(
+                f"not enough sessions after {day} for horizon {horizon}"
+            )
+        exit_date = cal[exit_i]
+        if day not in idx_close or exit_date not in idx_close:
+            raise ValueError(
+                f"missing {index_code} close at {day} or {exit_date}"
+            )
+        previous_exit = exit_date
+        windows.append(
+            {
+                "as_of": f"{day[:4]}-{day[4:6]}-{day[6:]}",
+                "scheduled_month": planned[:6],
+                "planned_entry_date": planned,
+                "entry_date": day,
+                "exit_date": exit_date,
+                "entry_shift_sessions": pos[day] - pos[planned],
+                "horizon_trading_days": horizon,
+                "index_code": index_code,
+                "index_return": round(idx_close[exit_date] / idx_close[day] - 1.0, 8),
+            }
+        )
+    return windows
+
+
+def parity_check(
+    windows: list[dict[str, Any]], reference_tasks_path: Path
+) -> int:
+    """Overlapping months must match the frozen benchmark exactly."""
+    reference = {}
+    for line in reference_tasks_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        meta = json.loads(line)["metadata"]
+        reference[meta["as_of"][:7]] = meta
+    checked = 0
+    for win in windows:
+        ref = reference.get(win["as_of"][:7])
+        if ref is None:
+            continue
+        for key in ("as_of", "entry_date", "exit_date", "horizon_trading_days"):
+            if win[key] != ref[key]:
+                raise ValueError(
+                    f"parity mismatch {win['as_of'][:7]} {key}: "
+                    f"synthesized={win[key]!r} reference={ref[key]!r}"
+                )
+        if abs(win["index_return"] - float(ref["index_return"])) > 1e-6:
+            raise ValueError(
+                f"parity mismatch {win['as_of'][:7]} index_return: "
+                f"synthesized={win['index_return']} reference={ref['index_return']}"
+            )
+        checked += 1
+    return checked
+
+
+def template_from_reference(reference_tasks_path: Path) -> str:
+    """Rebuild the question template from a frozen benchmark task file.
+
+    The v2 question text only varies by as_of and pool_size, so lifting the
+    first frozen task and re-inserting placeholders keeps the extended months
+    textually identical to the frozen benchmark (no prompt discontinuity).
+    """
+    first = json.loads(
+        reference_tasks_path.read_text(encoding="utf-8").splitlines()[0]
+    )
+    meta = first["metadata"]
+    text = first["task_question"]
+    text = text.replace("{", "{{").replace("}", "}}")
+    if meta["as_of"] not in text:
+        raise ValueError("reference question does not contain its as_of")
+    text = text.replace(meta["as_of"], "{as_of}")
+    pool_marker = f"约 {meta['pool_size']} 只"
+    if pool_marker not in text:
+        raise ValueError("reference question does not contain its pool size")
+    text = text.replace(pool_marker, "约 {pool_size} 只")
+    return text
+
+
+def legacy_windows() -> list[dict[str, Any]]:
     legacy = [
         json.loads(line)
         for line in LEGACY_TASKS.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    return [
+        {
+            "as_of": meta["as_of"],
+            "scheduled_month": meta["scheduled_month"],
+            "planned_entry_date": meta["planned_entry_date"],
+            "entry_date": meta["entry_date"],
+            "exit_date": meta["exit_date"],
+            "entry_shift_sessions": meta["entry_shift_sessions"],
+            "horizon_trading_days": meta["horizon_trading_days"],
+            "index_code": meta["index_code"],
+            "index_return": meta["index_return"],
+        }
+        for meta in (old["metadata"] for old in legacy)
+    ]
+
+
+def build_tasks(
+    version: str = DEFAULT_VERSION,
+    db_path: Path = DB_PATH,
+    months: str = "",
+    parity_reference: Path | None = None,
+    template_text: str | None = None,
+) -> list[dict[str, Any]]:
+    if version not in QUESTION_TEMPLATES:
+        raise ValueError(f"unsupported strategy version: {version}")
+    question_template = template_text or QUESTION_TEMPLATES[version]
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.execute("PRAGMA busy_timeout=30000")
     tasks: list[dict[str, Any]] = []
     try:
-        for old in legacy:
-            meta = old["metadata"]
+        if months:
+            start_month, _, end_month = months.partition(":")
+            windows = synthesize_windows(conn, start_month, end_month or start_month)
+            if parity_reference is not None and parity_reference.exists():
+                n = parity_check(windows, parity_reference)
+                print(f"parity check vs {parity_reference.name}: {n} months OK")
+        else:
+            windows = legacy_windows()
+        for meta in windows:
             entry, exit_ = meta["entry_date"], meta["exit_date"]
             pool = tradable_pool(conn, entry)
             if len(pool) < 1000:
@@ -320,10 +503,41 @@ def main() -> None:
         default="",
         help="output directory (default: data/ashare_trader_open_<version>)",
     )
+    parser.add_argument(
+        "--db",
+        default=str(DB_PATH),
+        help="full-market mirror sqlite path",
+    )
+    parser.add_argument(
+        "--months",
+        default="",
+        help="synthesize windows for YYYY-MM:YYYY-MM instead of legacy 12",
+    )
+    parser.add_argument(
+        "--parity",
+        default="",
+        help="existing open task jsonl; overlapping months must match exactly",
+    )
+    parser.add_argument(
+        "--template-from",
+        default="",
+        help="lift the exact question template from this frozen task jsonl",
+    )
     args = parser.parse_args()
     out_dir = Path(args.out) if args.out else DEFAULT_OUT_DIRS[args.version]
     out_dir.mkdir(parents=True, exist_ok=True)
-    tasks = build_tasks(args.version)
+    template_text = (
+        template_from_reference(Path(args.template_from))
+        if args.template_from
+        else None
+    )
+    tasks = build_tasks(
+        args.version,
+        db_path=Path(args.db),
+        months=args.months,
+        parity_reference=Path(args.parity) if args.parity else None,
+        template_text=template_text,
+    )
     output = out_dir / "standardized_data.jsonl"
     output.write_text(
         "".join(json.dumps(t, ensure_ascii=False) + "\n" for t in tasks),

@@ -19,12 +19,17 @@ Tables added to data/ashare_pools.db:
     fetch_progress(kind, trade_date)               -- resume bookkeeping
 
 Usage:
-    conda run -n Miro python scripts/ashare/fetch_full_market.py
-Safe to re-run: already-fetched dates are skipped.
+    conda run -n Miro python scripts/ashare/fetch_full_market.py \
+        [--db PATH] [--start YYYYMMDD] [--end YYYYMMDD]
+Safe to re-run: already-fetched dates are skipped.  Extending --end on an
+existing mirror fetches only the missing sessions (incl. trade_cal,
+index_daily and the ETF core, which are range-checked rather than marker
+checked).
 """
 
 from __future__ import annotations
 
+import argparse
 import sqlite3
 import sys
 import time
@@ -40,6 +45,7 @@ TUSHARE_API = "http://api.tushare.pro"
 
 START_DATE = "20230601"
 END_DATE = "20250731"
+INDEX_CODE = "000300.SH"
 ETF_CORE_CODES = (
     "510300.SH",  # 沪深300ETF
     "510500.SH",  # 中证500ETF
@@ -162,13 +168,84 @@ def fetch_stock_basic(conn: sqlite3.Connection, token: str) -> None:
     print(f"stock_basic_all: {len(allb)} rows (L/D/P)")
 
 
-def trading_days(conn: sqlite3.Connection) -> list[str]:
+def fetch_trade_cal(
+    conn: sqlite3.Connection, token: str, start: str, end: str
+) -> None:
+    """Ensure trade_cal covers [start, end]; fetch missing tail/head."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS trade_cal "
+        "(cal_date TEXT PRIMARY KEY, is_open INTEGER)"
+    )
+    row = conn.execute("SELECT MIN(cal_date), MAX(cal_date) FROM trade_cal").fetchone()
+    have_lo, have_hi = row if row else (None, None)
+    if have_lo is not None and have_lo <= start and have_hi >= end:
+        print(f"trade_cal: already covers {start}..{end}")
+        return
+    cal = tushare_query(
+        token,
+        "trade_cal",
+        {"exchange": "SSE", "start_date": start, "end_date": end},
+        fields="cal_date,is_open",
+    )
+    if cal.empty:
+        raise RuntimeError(f"trade_cal returned no rows for {start}..{end}")
+    cal.to_sql("tmp_cal", conn, if_exists="replace", index=False)
+    conn.execute(
+        "INSERT OR REPLACE INTO trade_cal (cal_date, is_open) "
+        "SELECT cal_date, is_open FROM tmp_cal"
+    )
+    conn.execute("DROP TABLE tmp_cal")
+    conn.commit()
+    n_open = int(cal["is_open"].astype(int).sum())
+    print(f"trade_cal: merged {len(cal)} rows ({n_open} trading days) {start}..{end}")
+
+
+def fetch_index_daily(
+    conn: sqlite3.Connection, token: str, start: str, end: str
+) -> None:
+    """Ensure index_daily (CSI300 close) covers the requested range."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS index_daily ("
+        "ts_code TEXT NOT NULL, trade_date TEXT NOT NULL, close REAL, "
+        "PRIMARY KEY (ts_code, trade_date))"
+    )
+    row = conn.execute(
+        "SELECT MAX(trade_date) FROM index_daily WHERE ts_code=?", (INDEX_CODE,)
+    ).fetchone()
+    have_hi = row[0] if row else None
+    expected_last = conn.execute(
+        "SELECT MAX(cal_date) FROM trade_cal WHERE is_open=1 AND cal_date<=?",
+        (end,),
+    ).fetchone()[0]
+    if have_hi is not None and expected_last is not None and have_hi >= expected_last:
+        print(f"index_daily: already covers up to {have_hi}")
+        return
+    idx = tushare_query(
+        token,
+        "index_daily",
+        {"ts_code": INDEX_CODE, "start_date": start, "end_date": end},
+        fields="ts_code,trade_date,close",
+    )
+    if idx.empty:
+        raise RuntimeError(f"index_daily returned no rows for {start}..{end}")
+    idx = idx[["ts_code", "trade_date", "close"]].copy()
+    idx.to_sql("tmp_idx", conn, if_exists="replace", index=False)
+    conn.execute("INSERT OR REPLACE INTO index_daily SELECT * FROM tmp_idx")
+    conn.execute("DROP TABLE tmp_idx")
+    conn.commit()
+    print(
+        f"index_daily {INDEX_CODE}: merged {len(idx)} rows "
+        f"({idx.trade_date.min()}..{idx.trade_date.max()})"
+    )
+
+
+def trading_days(conn: sqlite3.Connection, start: str, end: str) -> list[str]:
     return [
         d
         for (d,) in conn.execute(
             "SELECT cal_date FROM trade_cal WHERE is_open=1 "
             "AND cal_date BETWEEN ? AND ? ORDER BY cal_date",
-            (START_DATE, END_DATE),
+            (start, end),
         )
     ]
 
@@ -190,8 +267,10 @@ def fetch_by_date(
     fields: str,
     table: str,
     columns: list[str],
+    start: str,
+    end: str,
 ) -> None:
-    days = trading_days(conn)
+    days = trading_days(conn, start, end)
     done = done_dates(conn, kind)
     todo = [d for d in days if d not in done]
     print(f"{kind}: {len(todo)} dates to fetch ({len(done)} done)")
@@ -214,11 +293,23 @@ def fetch_by_date(
     conn.commit()
 
 
-def fetch_core_etfs(conn: sqlite3.Connection, token: str) -> None:
-    """Fetch the fixed v4 ETF core with resumable per-code markers."""
-    done = done_dates(conn, "etf_daily")
-    todo = [code for code in ETF_CORE_CODES if code not in done]
-    print(f"etf_daily: {len(todo)} codes to fetch ({len(done)} done)")
+def fetch_core_etfs(
+    conn: sqlite3.Connection, token: str, start: str, end: str
+) -> None:
+    """Fetch the fixed v4 ETF core; range-checked so --end extensions work."""
+    expected_last = conn.execute(
+        "SELECT MAX(cal_date) FROM trade_cal WHERE is_open=1 AND cal_date<=?",
+        (end,),
+    ).fetchone()[0]
+    todo = []
+    for code in ETF_CORE_CODES:
+        row = conn.execute(
+            "SELECT MAX(trade_date) FROM etf_daily WHERE ts_code=?", (code,)
+        ).fetchone()
+        have_hi = row[0] if row else None
+        if have_hi is None or expected_last is None or have_hi < expected_last:
+            todo.append(code)
+    print(f"etf_daily: {len(todo)} codes to fetch ({len(ETF_CORE_CODES) - len(todo)} current)")
     fields = "ts_code,trade_date,close,pct_chg,vol,amount"
     columns = ["ts_code", "trade_date", "close", "pct_chg", "vol", "amount"]
     for code in todo:
@@ -227,8 +318,8 @@ def fetch_core_etfs(conn: sqlite3.Connection, token: str) -> None:
             "fund_daily",
             {
                 "ts_code": code,
-                "start_date": START_DATE,
-                "end_date": END_DATE,
+                "start_date": start,
+                "end_date": end,
             },
             fields=fields,
         )
@@ -252,14 +343,22 @@ def fetch_core_etfs(conn: sqlite3.Connection, token: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", default=str(DB_PATH), help="sqlite mirror path")
+    parser.add_argument("--start", default=START_DATE, help="YYYYMMDD")
+    parser.add_argument("--end", default=END_DATE, help="YYYYMMDD")
+    args = parser.parse_args()
+
     token = load_token()
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     init_tables(conn)
 
+    fetch_trade_cal(conn, token, args.start, args.end)
+    fetch_index_daily(conn, token, args.start, args.end)
     fetch_stock_basic(conn, token)
-    fetch_core_etfs(conn, token)
+    fetch_core_etfs(conn, token, args.start, args.end)
     fetch_by_date(
         conn,
         token,
@@ -268,6 +367,8 @@ def main() -> None:
         fields="ts_code,trade_date,close,pct_chg,vol,amount",
         table="market_daily",
         columns=["ts_code", "trade_date", "close", "pct_chg", "vol", "amount"],
+        start=args.start,
+        end=args.end,
     )
     fetch_by_date(
         conn,
@@ -280,6 +381,8 @@ def main() -> None:
             "ts_code", "trade_date", "pe_ttm", "pb",
             "turnover_rate", "total_mv", "circ_mv",
         ],
+        start=args.start,
+        end=args.end,
     )
 
     n1 = conn.execute("SELECT COUNT(*) FROM market_daily").fetchone()[0]
@@ -288,9 +391,10 @@ def main() -> None:
         "SELECT COUNT(DISTINCT ts_code) FROM market_daily"
     ).fetchone()[0]
     ne = conn.execute("SELECT COUNT(*) FROM etf_daily").fetchone()[0]
+    hi = conn.execute("SELECT MAX(trade_date) FROM market_daily").fetchone()[0]
     print(
         f"\nDONE_FULL_MARKET daily={n1} basic={n2} "
-        f"etf_daily={ne} stocks={nc}"
+        f"etf_daily={ne} stocks={nc} max_date={hi}"
     )
     conn.close()
 

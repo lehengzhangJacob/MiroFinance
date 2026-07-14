@@ -71,5 +71,12 @@ MiroFlow/.venv/
 
 # Large A-share snapshot DBs (fetch via shared/.../download_assets.sh + GitHub Release)
 shared/ashare_open_stocks_glm52_20260714/*.db
+shared/ashare_open_stocks_glm52_20260714/*.db-*
 shared/ashare_open_stocks_glm52_20260714/arms/**/*.db
+shared/ashare_open_stocks_glm52_20260714/.release_staging/
+shared/ashare_open_stocks_glm52_20260714/arms/
+shared/ashare_open_stocks_glm52_24m_20260715/*.db
+shared/ashare_open_stocks_glm52_24m_20260715/*.db-*
+MiroMemSkill/memory_bank/mem0_qdrant/
+MiroMemSkill_Evolve/
 MiroMemSkill_hermes/.evolution/.registry.lock

@@ -79,8 +79,135 @@
           ]
         }
       }
+    },
+    "cc249cf4da2d153f97effad6053a5cb9ac0cabd2cf963ab1cac7c31d810afd8c": {
+      "digest": "cc249cf4da2d153f97effad6053a5cb9ac0cabd2cf963ab1cac7c31d810afd8c",
+      "short_id": "cc249cf4da2d",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/full_20260714_230306/arms/baseline_train/out (train)",
+      "status": "holdout_evaluated",
+      "created_at": "2026-07-14T15:28:54+00:00",
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-14T15:50:44+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/full_20260714_230306/arms/baseline_dev/out",
+            "total_return": -0.173919,
+            "index_return": -0.060453,
+            "excess_return": -0.113466,
+            "max_drawdown": -0.173919,
+            "worst_month": -0.152617,
+            "win_rate": 0.3333,
+            "fees": 3398.69,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/full_20260714_230306/arms/candidate_dev_cc249cf4da2d/out",
+            "total_return": -0.184439,
+            "index_return": -0.060453,
+            "excess_return": -0.123986,
+            "max_drawdown": -0.184439,
+            "worst_month": -0.142248,
+            "win_rate": 0.3333,
+            "fees": 4252.0,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-01-02",
+              "2025-02-07",
+              "2025-03-07"
+            ],
+            "diffs_pp": [
+              2.0875,
+              -4.8997,
+              1.0369
+            ],
+            "mean_diff_pp": -0.5918,
+            "stdev_diff_pp": 3.7676,
+            "wins": 2,
+            "losses": 1,
+            "ties": 0,
+            "sign_test_p": 1.0
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": -0.854798,
+          "run_id": "full_20260714_230306",
+          "months": [
+            "2025-01-02",
+            "2025-02-07",
+            "2025-03-07"
+          ]
+        },
+        "fitness_holdout": {
+          "at": "2026-07-14T16:22:27+00:00",
+          "level": "holdout",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/full_20260714_230306/arms/baseline/out",
+            "total_return": 0.134445,
+            "index_return": 0.109422,
+            "excess_return": 0.025024,
+            "max_drawdown": -0.02957,
+            "worst_month": -0.02957,
+            "win_rate": 0.6667,
+            "fees": 4326.79,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/full_20260714_230306/arms/candidate/out",
+            "total_return": 0.260476,
+            "index_return": 0.109422,
+            "excess_return": 0.151054,
+            "max_drawdown": 0.0,
+            "worst_month": 0.054442,
+            "win_rate": 1.0,
+            "fees": 5680.54,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-04-07",
+              "2025-05-08",
+              "2025-06-06"
+            ],
+            "diffs_pp": [
+              -3.3436,
+              5.8678,
+              8.4012
+            ],
+            "mean_diff_pp": 3.6418,
+            "stdev_diff_pp": 6.1808,
+            "wins": 2,
+            "losses": 1,
+            "ties": 0,
+            "sign_test_p": 1.0
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": 3.6418,
+          "run_id": "full_20260714_230306",
+          "months": [
+            "2025-04-07",
+            "2025-05-08",
+            "2025-06-06"
+          ]
+        }
+      }
     }
   },
-  "holdout_leases": {},
+  "holdout_leases": {
+    "cc249cf4da2d153f97effad6053a5cb9ac0cabd2cf963ab1cac7c31d810afd8c": {
+      "run_id": "full_20260714_230306",
+      "acquired_at": "2026-07-14T15:50:44+00:00"
+    }
+  },
   "promotions": []
 }
