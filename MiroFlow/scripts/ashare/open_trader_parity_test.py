@@ -183,6 +183,43 @@ def assert_evaluator_determinism(
         conn.close()
 
 
+def assert_open_episode_gating(tasks: list[dict[str, Any]]) -> None:
+    """Real generated task metadata must qualify for open-market episode logging.
+
+    Guards against the universe-string mismatch that silently disabled
+    episode persistence for a whole run (all_ashare vs
+    all_ashare_point_in_time).
+    """
+    program = """
+import json,sys
+from common_benchmark import _open_market_episode_task
+payload=json.load(sys.stdin)
+print(json.dumps([_open_market_episode_task(m) for m in payload["metadatas"]]))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(MEM_ROOT)
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=MEM_ROOT,
+        env=env,
+        input=json.dumps(
+            {"metadatas": [task["metadata"] for task in tasks]}
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    flags = json.loads(result.stdout)
+    assert len(flags) == len(tasks)
+    failed = [
+        tasks[i]["task_id"] for i, ok in enumerate(flags) if not ok
+    ]
+    assert not failed, (
+        "open-market episode gating rejects real task metadata: "
+        + ",".join(failed)
+    )
+
+
 def assert_open_episode_return_parity(
     reference: Any,
     tasks: list[dict[str, Any]],
@@ -269,6 +306,7 @@ def main() -> None:
         evaluator_path,
         manifest["artifacts"]["evaluator"]["sha256"],
     )
+    assert_open_episode_gating(tasks)
     assert_open_episode_return_parity(reference, tasks, database_path)
 
     manifest_digest = hashlib.sha256(

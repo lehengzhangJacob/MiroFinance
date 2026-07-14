@@ -77,6 +77,29 @@ _SATELLITE_DECISION_FACTOR_FIELDS = (
 )
 
 
+# gen_open_trader_tasks.py writes universe="all_ashare"; the older
+# "all_ashare_point_in_time" spelling is accepted for compatibility.
+_OPEN_MARKET_UNIVERSES = ("all_ashare", "all_ashare_point_in_time")
+
+
+def _open_market_episode_task(metadata: Mapping[str, Any]) -> bool:
+    """True when a trader task logs open-market episodes.
+
+    Open-universe tasks carry no embedded per-stock outcome labels; their
+    realized returns are computed later from ASHARE_OPEN_DB.  Legacy
+    fixed-pool tasks embed outcomes and keep the anchor/satellite path.
+    """
+    has_embedded_outcomes = bool(
+        metadata.get("stock_returns")
+        and metadata.get("excess_returns")
+        and metadata.get("stock_info")
+    )
+    return (
+        not has_embedded_outcomes
+        and str(metadata.get("universe", "")) in _OPEN_MARKET_UNIVERSES
+    )
+
+
 def _open_market_holding_returns(
     database_path: str | Path,
     ts_codes: Sequence[str],
@@ -1829,10 +1852,7 @@ class BenchmarkEvaluator(ABC):
         has_embedded_outcomes = bool(
             stock_returns and excess_returns and stock_info
         )
-        open_market_episodes_only = (
-            not has_embedded_outcomes
-            and str(metadata.get("universe", "")) == "all_ashare_point_in_time"
-        )
+        open_market_episodes_only = _open_market_episode_task(metadata)
         if not has_embedded_outcomes and not open_market_episodes_only:
             print(f"    [trader {month}] incomplete task metadata")
             return
