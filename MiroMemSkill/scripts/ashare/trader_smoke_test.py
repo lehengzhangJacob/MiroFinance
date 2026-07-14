@@ -29,9 +29,10 @@ from common_benchmark import (  # noqa: E402
     BenchmarkEvaluator,
     BenchmarkTask,
     TaskStatus,
-    _render_satellite_candidate_block,
     _SATELLITE_DECISION_FACTOR_FIELDS,
     _build_core_satellite_attribution,
+    _open_market_holding_returns,
+    _render_satellite_candidate_block,
 )
 from scripts.ashare.eval_trader import evaluate_allocations  # noqa: E402
 from scripts.ashare.eval_open_trader import (  # noqa: E402
@@ -1535,6 +1536,36 @@ def test_episode_memory_and_factors(tasks: list[dict[str, Any]]) -> None:
         isolated = Mem0Memory(InMemoryStore(tmp, "trader-b"))
         assert isolated.trader_episode_block("20240801") == ""
 
+        open_store = InMemoryStore(tmp, "trader-open")
+        open_memory = Mem0Memory(open_store)
+        open_weights = {code: 0.0 for code in pool}
+        open_weights[pool[0]] = 0.25
+        open_weights[pool[1]] = 0.15
+        assert open_memory.add_trader_episode(
+            task_id="ashare_open_trader_2024-07-01",
+            month="2024-07",
+            available_after="20240729",
+            weights=open_weights,
+            cash=0.60,
+            gross_return=0.03,
+            net_return=0.028,
+            index_return=-0.02,
+            active_return=0.048,
+            total_cost=700.0,
+            contributions={pool[0]: 0.02, pool[1]: 0.008},
+            episode_kind="open_market",
+            reasoning="OPEN_MARKET_REASONING_MUST_NOT_BE_INJECTED",
+            parse_ok=True,
+        ).startswith("ADD")
+        open_block = open_memory.trader_episode_block("20240801")
+        assert "已到期的开放市场组合审计" in open_block
+        assert "开放市场事实 episode 1 期" in open_block
+        assert "持仓数 2，CASH 60.0%" in open_block
+        assert f"{pool[0]}=25.0%" in open_block
+        assert "净贡献较强" in open_block
+        assert "历史代码不得机械继承" in open_block
+        assert "OPEN_MARKET_REASONING_MUST_NOT_BE_INJECTED" not in open_block
+
         legacy_store = InMemoryStore(tmp, "trader-legacy")
         legacy_store.add(
             "LEGACY_MODEL_REASONING_MUST_NOT_BE_INJECTED",
@@ -1976,11 +2007,70 @@ def test_dispatch_and_configs() -> None:
         assert core.memory.reflection_mode == "trader"
         assert core.main_agent.max_turns == -1
         assert core.main_agent.llm.thinking_mode == "enabled"
+
+        with initialize_config_dir(version_base=None, config_dir=config_dir):
+            open_mem = compose(
+                config_name="agent_ashare_trader_open_memskill_glm"
+            )
+        OmegaConf.resolve(open_mem)
+        assert open_mem.benchmark.name == "ashare-trader-open"
+        assert open_mem.main_agent.llm.model_name == "glm-5.2"
+        assert open_mem.main_agent.generic_task_guidance_enabled is False
+        assert open_mem.main_agent.output_process.reuse_terminal_response is True
+        assert open_mem.memory.enabled is True
+        assert open_mem.memory.skill_enabled is True
+        assert open_mem.memory.inject_enabled is False
+        assert open_mem.memory.reflection_mode == "trader"
+        assert open_mem.memory.namespace == (
+            "ashare_trader_open_smoke-isolated"
+        )
     finally:
         if previous is None:
             os.environ.pop("ASHARE_TRADER_RUN_ID", None)
         else:
             os.environ["ASHARE_TRADER_RUN_ID"] = previous
+
+
+def test_open_market_holding_returns() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        database = Path(tmp) / "open.db"
+        conn = sqlite3.connect(database)
+        try:
+            conn.execute(
+                "CREATE TABLE market_daily("
+                "ts_code TEXT,trade_date TEXT,pct_chg REAL)"
+            )
+            conn.executemany(
+                "INSERT INTO market_daily VALUES (?,?,?)",
+                [
+                    ("000001.SZ", "20240701", 99.0),
+                    ("000001.SZ", "20240702", 10.0),
+                    ("000001.SZ", "20240703", -5.0),
+                    ("600000.SH", "20240702", None),
+                    ("600000.SH", "20240703", 2.0),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        returns = _open_market_holding_returns(
+            database,
+            ["000001.SZ", "600000.SH", "000001.SZ"],
+            "20240701",
+            "20240703",
+        )
+        assert abs(returns["000001.SZ"] - 0.045) < 1e-12
+        assert abs(returns["600000.SH"] - 0.02) < 1e-12
+        try:
+            _open_market_holding_returns(
+                database,
+                ["999999.SH"],
+                "20240701",
+                "20240703",
+            )
+            raise AssertionError("missing selected holding did not fail")
+        except ValueError as error:
+            assert "999999.SH" in str(error)
 
 
 def main() -> None:
@@ -1999,6 +2089,7 @@ def main() -> None:
     test_structured_satellite_attribution_memory()
     test_v4_etf_growth_policy_and_replay()
     test_dispatch_and_configs()
+    test_open_market_holding_returns()
     print(
         "[OK] MemSkill ashare-trader: legacy coverage plus exact core-satellite "
         "sleeves, v4 fixed ETF core/PIT growth quality, lot replay, and "

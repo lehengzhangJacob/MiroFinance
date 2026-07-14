@@ -3,6 +3,10 @@ set -euo pipefail
 
 MODE="${1:-smoke}"
 RUN_TAG="${2:-20260714_pair01}"
+PARALLEL="${PARALLEL:-0}"
+if [[ "${3:-}" == "parallel" ]]; then
+  PARALLEL=1
+fi
 SNAPSHOT="${ASHARE_COMPARE_SNAPSHOT:-/home/msj_team/Jacob/agent/shared/ashare_open_stocks_glm52_20260714}"
 AGENT_ROOT="/home/msj_team/Jacob/agent"
 FLOW_ROOT="${AGENT_ROOT}/MiroFlow"
@@ -11,7 +15,7 @@ KEY_FILE="${AGENT_ROOT}/llm_key"
 TOKEN_FILE="${TUSHARE_TOKEN_FILE:-${AGENT_ROOT}/tushare_token}"
 
 if [[ "${MODE}" != "smoke" && "${MODE}" != "full" ]]; then
-  echo "usage: $0 [smoke|full] [run_tag]" >&2
+  echo "usage: $0 [smoke|full] [run_tag] [parallel]" >&2
   exit 2
 fi
 if [[ ! -f "${SNAPSHOT}/manifest.json" ]]; then
@@ -46,6 +50,8 @@ FLOW_OUT="${FLOW_ROOT}/logs/ashare_trader_open_flow_glm_${RUN_TAG}_${MODE}"
 MEM_OUT="${MEM_ROOT}/logs/ashare_trader_open_memskill_glm_${RUN_TAG}_${MODE}"
 REPORT="${FLOW_ROOT}/logs/tmpfiles/ashare_open_flow_vs_memskill_${RUN_TAG}_${MODE}.md"
 RUN_MANIFEST="${ARM_DIR}/run_manifest.json"
+MEMORY_PROFILE="ashare_trader_open_mem0"
+MEMORY_NAMESPACE="ashare_trader_open_open_${RUN_TAG}_${MODE}"
 
 for path in "${FLOW_OUT}" "${MEM_OUT}" "${ARM_DIR}"; do
   if [[ -e "${path}" ]]; then
@@ -65,14 +71,26 @@ cp --reflink=auto --preserve=mode,timestamps "${SOURCE_DB}" "${FLOW_DB}"
 cp --reflink=auto --preserve=mode,timestamps "${SOURCE_DB}" "${MEM_DB}"
 
 python3 - "${SNAPSHOT}" "${MODE}" "${RUN_TAG}" "${FLOW_DB}" "${MEM_DB}" \
-  "${FLOW_OUT}" "${MEM_OUT}" "${REPORT}" > "${RUN_MANIFEST}" <<'PY'
+  "${FLOW_OUT}" "${MEM_OUT}" "${REPORT}" "${MEMORY_PROFILE}" \
+  "${MEMORY_NAMESPACE}" > "${RUN_MANIFEST}" <<'PY'
 import hashlib
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-snapshot, mode, tag, flow_db, mem_db, flow_out, mem_out, report = sys.argv[1:]
+(
+    snapshot,
+    mode,
+    tag,
+    flow_db,
+    mem_db,
+    flow_out,
+    mem_out,
+    report,
+    memory_profile,
+    memory_namespace,
+) = sys.argv[1:]
 base = json.loads((Path(snapshot) / "manifest.json").read_text())
 payload = {
     "version": 1,
@@ -86,8 +104,21 @@ payload = {
     "model": base["model"],
     "artifacts": base["artifacts"],
     "arms": {
-        "miroflow": {"database": flow_db, "output": flow_out},
-        "miromemskill": {"database": mem_db, "output": mem_out},
+        "miroflow": {
+            "database": flow_db,
+            "output": flow_out,
+            "agent_config": "agent_ashare_trader_open_glm",
+            "memory_enabled": False,
+        },
+        "miromemskill": {
+            "database": mem_db,
+            "output": mem_out,
+            "agent_config": "agent_ashare_trader_open_memskill_glm",
+            "memory_enabled": True,
+            "memory_profile": memory_profile,
+            "memory_namespace": memory_namespace,
+            "skill_enabled": True,
+        },
     },
     "report": report,
 }
@@ -104,6 +135,8 @@ export ASHARE_OPEN_SERVER="${SERVER}"
 export ASHARE_OPEN_SERVER_SHA256="${SERVER_SHA}"
 export TUSHARE_TOKEN_FILE="${TOKEN_FILE}"
 export CHINESE_CONTEXT="${CHINESE_CONTEXT:-true}"
+export ASHARE_TRADER_RUN_ID="open_${RUN_TAG}_${MODE}"
+export MEM0_TELEMETRY="false"
 
 WHITELIST=()
 if [[ "${MODE}" == "smoke" ]]; then
@@ -112,27 +145,50 @@ if [[ "${MODE}" == "smoke" ]]; then
   )
 fi
 
-echo "=== MiroFlow ${MODE} start $(date -Is) ==="
-(
-  cd "${FLOW_ROOT}"
-  export ASHARE_OPEN_DB="${FLOW_DB}"
-  export DATA_DIR="${SNAPSHOT}/tasks"
-  conda run --no-capture-output -n Miro python main.py common-benchmark \
-    --config_file_name=agent_ashare_trader_open_glm \
-    "output_dir=${FLOW_OUT}" \
-    "${WHITELIST[@]}"
-)
+run_flow_arm() {
+  echo "=== MiroFlow ${MODE} start $(date -Is) ==="
+  (
+    cd "${FLOW_ROOT}"
+    export ASHARE_OPEN_DB="${FLOW_DB}"
+    export DATA_DIR="${SNAPSHOT}/tasks"
+    conda run --no-capture-output -n Miro python main.py common-benchmark \
+      --config_file_name=agent_ashare_trader_open_glm \
+      "output_dir=${FLOW_OUT}" \
+      "${WHITELIST[@]}"
+  )
+}
 
-echo "=== MiroMemSkill ${MODE} start $(date -Is) ==="
-(
-  cd "${MEM_ROOT}"
-  export ASHARE_OPEN_DB="${MEM_DB}"
-  export DATA_DIR="${SNAPSHOT}/tasks"
-  conda run --no-capture-output -n Miro python main.py common-benchmark \
-    --config_file_name=agent_ashare_trader_open_glm \
-    "output_dir=${MEM_OUT}" \
-    "${WHITELIST[@]}"
-)
+run_memskill_arm() {
+  echo "=== MiroMemSkill ${MODE} start $(date -Is) ==="
+  (
+    cd "${MEM_ROOT}"
+    export ASHARE_OPEN_DB="${MEM_DB}"
+    export DATA_DIR="${SNAPSHOT}/tasks"
+    conda run --no-capture-output -n Miro python main.py common-benchmark \
+      --config_file_name=agent_ashare_trader_open_memskill_glm \
+      "output_dir=${MEM_OUT}" \
+      "${WHITELIST[@]}"
+  )
+}
+
+if [[ "${PARALLEL}" == "1" ]]; then
+  echo "=== parallel arms enabled $(date -Is) ==="
+  run_flow_arm &
+  FLOW_PID=$!
+  run_memskill_arm &
+  MEM_PID=$!
+  FLOW_STATUS=0
+  MEM_STATUS=0
+  wait "${FLOW_PID}" || FLOW_STATUS=$?
+  wait "${MEM_PID}" || MEM_STATUS=$?
+  if [[ "${FLOW_STATUS}" -ne 0 || "${MEM_STATUS}" -ne 0 ]]; then
+    echo "parallel arm failed: flow=${FLOW_STATUS} memskill=${MEM_STATUS}" >&2
+    exit 1
+  fi
+else
+  run_flow_arm
+  run_memskill_arm
+fi
 
 echo "=== paired evaluation start $(date -Is) ==="
 (
@@ -143,7 +199,7 @@ echo "=== paired evaluation start $(date -Is) ==="
     --tasks "${TASK_FILE}" \
     --db "${SOURCE_DB}" \
     --run "MiroFlow-Plain(GLM-5.2)=${FLOW_OUT}" \
-    --run "MiroMemSkill(GLM-5.2)=${MEM_OUT}" \
+    --run "MiroMemSkill-MemSkill(GLM-5.2)=${MEM_OUT}" \
     --random-seeds 100 \
     --out "${REPORT}"
 )

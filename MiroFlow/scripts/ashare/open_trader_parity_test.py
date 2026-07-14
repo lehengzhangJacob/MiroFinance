@@ -55,9 +55,9 @@ def load_tasks(path: Path) -> list[dict[str, Any]]:
     ]
 
 
-def compose_agent(root: Path) -> Any:
+def compose_agent(root: Path, config_name: str) -> Any:
     with initialize_config_dir(version_base=None, config_dir=str(root / "config")):
-        config = compose(config_name="agent_ashare_trader_open_glm")
+        config = compose(config_name=config_name)
     OmegaConf.resolve(config)
     return config
 
@@ -84,8 +84,9 @@ print("1" if validate_portfolio_answer(payload["answer"],payload["metadata"]).ok
 
 
 def assert_config_parity() -> None:
-    flow = compose_agent(FLOW_ROOT)
-    mem = compose_agent(MEM_ROOT)
+    os.environ.setdefault("ASHARE_TRADER_RUN_ID", "parity-open-trader")
+    flow = compose_agent(FLOW_ROOT, "agent_ashare_trader_open_glm")
+    mem = compose_agent(MEM_ROOT, "agent_ashare_trader_open_memskill_glm")
     assert flow.benchmark.name == mem.benchmark.name == "ashare-trader-open"
     assert flow.benchmark.execution.max_concurrent == 1
     assert mem.benchmark.execution.max_concurrent == 1
@@ -102,6 +103,23 @@ def assert_config_parity() -> None:
     assert list(flow.main_agent.tool_config) == list(mem.main_agent.tool_config) == [
         "tool-ashare-open"
     ]
+    assert not flow.get("memory")
+    assert mem.memory.enabled is True
+    assert mem.memory.skill_enabled is True
+    assert mem.memory.inject_enabled is False
+    assert mem.memory.inject_top_k == 0
+    assert mem.memory.reflection_mode == "trader"
+    assert mem.memory.namespace == "ashare_trader_open_parity-open-trader"
+    assert (
+        flow.main_agent.generic_task_guidance_enabled
+        == mem.main_agent.generic_task_guidance_enabled
+        is False
+    )
+    assert (
+        flow.main_agent.output_process.reuse_terminal_response
+        == mem.main_agent.output_process.reuse_terminal_response
+        is True
+    )
 
 
 def assert_task_and_validator_parity(tasks: list[dict[str, Any]]) -> None:
@@ -165,6 +183,59 @@ def assert_evaluator_determinism(
         conn.close()
 
 
+def assert_open_episode_return_parity(
+    reference: Any,
+    tasks: list[dict[str, Any]],
+    database_path: Path,
+) -> None:
+    first = tasks[0]["metadata"]
+    codes = first["stock_pool"][:4]
+    program = """
+import json,sys
+from common_benchmark import _open_market_holding_returns
+payload=json.load(sys.stdin)
+print(json.dumps(_open_market_holding_returns(
+    payload["database"],
+    payload["codes"],
+    payload["entry"],
+    payload["exit"],
+), sort_keys=True))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(MEM_ROOT)
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=MEM_ROOT,
+        env=env,
+        input=json.dumps(
+            {
+                "database": str(database_path),
+                "codes": codes,
+                "entry": first["entry_date"],
+                "exit": first["exit_date"],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    actual = json.loads(result.stdout)
+    conn = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+    try:
+        market = reference.Market(conn)
+        expected = {
+            code: market.asset_window_return(
+                code,
+                first["entry_date"],
+                first["exit_date"],
+            )
+            for code in codes
+        }
+    finally:
+        conn.close()
+    assert actual == expected
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
@@ -194,13 +265,19 @@ def main() -> None:
         tasks_path,
         database_path,
     )
+    reference = load_reference_evaluator(
+        evaluator_path,
+        manifest["artifacts"]["evaluator"]["sha256"],
+    )
+    assert_open_episode_return_parity(reference, tasks, database_path)
 
     manifest_digest = hashlib.sha256(
         (snapshot / "manifest.json").read_bytes()
     ).hexdigest()
     print(
         "[OK] open-market parity: 12 shared stocks-only tasks, matching "
-        "GLM-5.2/tool settings, validators, database and deterministic evaluator"
+        "GLM-5.2/tool settings, MemSkill memory profile, validators, "
+        "episode returns, database and deterministic evaluator"
     )
     print(f"snapshot_manifest_sha256={manifest_digest}")
 

@@ -980,6 +980,7 @@ class Mem0Memory:
         active_return: float,
         total_cost: float,
         contributions: Mapping[str, float],
+        episode_kind: str = "",
         anchor_attribution: Mapping[str, Any] | None = None,
         satellite_attribution: Mapping[str, Any] | None = None,
         reasoning: str = "",
@@ -1209,10 +1210,20 @@ class Mem0Memory:
             "functional_stance": "neutral",
             "source": "trader_episode",
             "source_tasks": [task_id],
+            "episode_kind": str(episode_kind or "").strip().lower(),
+            "gross_return": round(float(gross_return), 10),
             "net_return": round(float(net_return), 10),
             "index_return": round(float(index_return), 10),
             "active_return": round(float(active_return), 10),
             "cash_weight": round(float(cash), 10),
+            "holding_count": len(positions),
+            "position_weights": {
+                code: round(float(weight), 10) for code, weight in positions
+            },
+            "net_contributions": {
+                str(code): round(float(value), 10)
+                for code, value in contributions.items()
+            },
             "total_cost": round(float(total_cost), 6),
             "attribution_version": 0,
             "satellite_attribution_version": 0,
@@ -1377,6 +1388,7 @@ class Mem0Memory:
         fallback_count = 0
         fallback_known_count = 0
         active_wins = 0
+        open_market_count = 0
         for record in visible:
             net = _fact_number(record.metadata.get("net_return"))
             index = _fact_number(record.metadata.get("index_return"))
@@ -1388,6 +1400,8 @@ class Mem0Memory:
             portfolio_nav *= 1.0 + net
             benchmark_nav *= 1.0 + index
             active_wins += active > 0
+            if record.metadata.get("episode_kind") == "open_market":
+                open_market_count += 1
             version = _attribution_version(record.metadata)
             anchor_return = _fact_number(
                 record.metadata.get("anchor_net_return")
@@ -1440,25 +1454,41 @@ class Mem0Memory:
             for record in visible
             if _attribution_version(record.metadata) >= 1
             or _satellite_attribution_version(record.metadata) >= 1
+            or record.metadata.get("episode_kind") == "open_market"
         ]
         recent = structured[-max_episodes:]
+        audit_title = (
+            "### 已到期的开放市场组合审计（严格 walk-forward）\n"
+            if open_market_count and open_market_count == len(visible)
+            else "### 已到期的交易组合审计（严格 walk-forward）\n"
+            if open_market_count
+            else "### 已到期的动量锚点偏离审计（严格 walk-forward）\n"
+        )
         lines = [
             (
-                "### 已到期的动量锚点偏离审计（严格 walk-forward）\n"
-                f"截至 {cutoff} 共有 {len(visible)} 个可见交易窗口；"
+                audit_title
+                + f"截至 {cutoff} 共有 {len(visible)} 个可见交易窗口；"
                 f"组合累计 {portfolio_nav - 1:+.2%}，沪深300同期累计 "
                 f"{benchmark_nav - 1:+.2%}，跑赢窗口 {active_wins}/{len(visible)}。"
             ),
-            (
+        ]
+        if attributed_count:
+            lines.append(
                 (
                     f"有结构化锚点归因 {attributed_count} 期；实际组合相对同期"
                     "动量锚点累计差 "
                     f"{attributed_portfolio_nav / anchor_nav - 1:+.2%}。"
                 )
-                if attributed_count and anchor_nav > 0
-                else "旧记录没有锚点归因，已禁止注入其中的历史推理。"
-            ),
-        ]
+                if anchor_nav > 0
+                else f"有结构化锚点归因 {attributed_count} 期。"
+            )
+        elif not open_market_count:
+            lines.append("旧记录没有锚点归因，已禁止注入其中的历史推理。")
+        if open_market_count:
+            lines.append(
+                f"有开放市场事实 episode {open_market_count} 期；"
+                "仅包含确定性仓位、到期收益与个股净贡献，不包含模型推理。"
+            )
         if satellite_count:
             unknown_fallbacks = satellite_count - fallback_known_count
             fallback_summary = (
@@ -1491,10 +1521,16 @@ class Mem0Memory:
                 "成熟记录的实际卫星均与确定性top一致；"
                 "模型/agent相对确定性卫星增量效应 +0.00%。"
             )
-        lines.append(
-            "这些是到期后的固定公式审计，不是当前股票的收益标签。"
-            "只校准偏离与卫星选择成本；不得继承过去的长篇理由。"
-        )
+        if open_market_count:
+            lines.append(
+                "这些是到期后的固定公式审计，不是当前股票的收益标签。"
+                "只校准筛选流程、仓位和集中风险；历史代码不得机械继承。"
+            )
+        else:
+            lines.append(
+                "这些是到期后的固定公式审计，不是当前股票的收益标签。"
+                "只校准偏离与卫星选择成本；不得继承过去的长篇理由。"
+            )
         for record in recent:
             net = _fact_number(record.metadata.get("net_return"))
             index = _fact_number(record.metadata.get("index_return"))
@@ -1510,6 +1546,43 @@ class Mem0Memory:
                     f"沪深300 {index:+.2%}，主动收益 {active:+.2%}"
                 )
             ]
+            if record.metadata.get("episode_kind") == "open_market":
+                cash = _fact_number(record.metadata.get("cash_weight"))
+                holding_count = record.metadata.get("holding_count")
+                if cash is not None or holding_count is not None:
+                    cash_text = f"{cash:.1%}" if cash is not None else "?"
+                    facts.append(
+                        f"持仓数 {holding_count if holding_count is not None else '?'}，"
+                        f"CASH {cash_text}"
+                    )
+                positions = dict(record.metadata.get("position_weights", {}) or {})
+                if positions:
+                    position_text = ",".join(
+                        f"{code}={float(weight):.1%}"
+                        for code, weight in sorted(
+                            positions.items(),
+                            key=lambda item: (-float(item[1]), str(item[0])),
+                        )
+                    )
+                    facts.append(f"历史仓位={position_text}")
+                contributions = dict(
+                    record.metadata.get("net_contributions", {}) or {}
+                )
+                if contributions:
+                    ranked = sorted(
+                        (
+                            (str(code), float(value))
+                            for code, value in contributions.items()
+                        ),
+                        key=lambda item: (-item[1], item[0]),
+                    )
+                    best = ",".join(
+                        f"{code}={value:+.2%}" for code, value in ranked[:2]
+                    )
+                    worst = ",".join(
+                        f"{code}={value:+.2%}" for code, value in ranked[-2:]
+                    )
+                    facts.append(f"净贡献较强={best}，较弱={worst}")
             if _attribution_version(record.metadata) >= 1:
                 anchor_return = _fact_number(
                     record.metadata.get("anchor_net_return")

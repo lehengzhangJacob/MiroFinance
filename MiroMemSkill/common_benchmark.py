@@ -7,6 +7,7 @@ import json
 import math
 import os
 import signal
+import sqlite3
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -74,6 +75,45 @@ _SATELLITE_DECISION_FACTOR_FIELDS = (
     "netprofit_yoy",
     "ml_rank",
 )
+
+
+def _open_market_holding_returns(
+    database_path: str | Path,
+    ts_codes: Sequence[str],
+    entry_date: str,
+    exit_date: str,
+) -> dict[str, float]:
+    """Compound frozen daily returns for selected open-market holdings."""
+    codes = list(dict.fromkeys(str(code).strip().upper() for code in ts_codes if code))
+    if not codes:
+        return {}
+    path = Path(database_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"ASHARE_OPEN_DB does not exist: {path}")
+    placeholders = ",".join("?" for _ in codes)
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT ts_code,pct_chg FROM market_daily "
+            f"WHERE ts_code IN ({placeholders}) "
+            "AND trade_date>? AND trade_date<=? "
+            "ORDER BY ts_code,trade_date",
+            (*codes, str(entry_date), str(exit_date)),
+        ).fetchall()
+    finally:
+        conn.close()
+    navs: dict[str, float] = {}
+    for code, change in rows:
+        navs.setdefault(str(code), 1.0)
+        if change is not None:
+            navs[str(code)] *= 1.0 + float(change) / 100.0
+    missing = [code for code in codes if code not in navs]
+    if missing:
+        raise ValueError(
+            "missing open-market realized returns for selected holdings: "
+            + ",".join(missing)
+        )
+    return {code: navs[code] - 1.0 for code in codes}
 
 
 def _pit_panel_value(value: Any) -> Any:
@@ -1770,19 +1810,9 @@ class BenchmarkEvaluator(ABC):
 
         metadata = task.metadata or {}
         pool = list(metadata.get("stock_pool", []))
-        stock_returns = metadata.get("stock_returns", {})
-        excess_returns = metadata.get("excess_returns", {})
         entry_date = str(metadata.get("entry_date", ""))
         exit_date = str(metadata.get("exit_date", ""))
-        stock_info = metadata.get("stock_info", {})
-        if (
-            not pool
-            or not stock_returns
-            or not excess_returns
-            or not entry_date
-            or not exit_date
-            or not stock_info
-        ):
+        if not pool or not entry_date or not exit_date:
             print(f"    [trader {month}] incomplete task metadata")
             return
 
@@ -1793,6 +1823,53 @@ class BenchmarkEvaluator(ABC):
             max_stock_weight=float(metadata.get("max_stock_weight", 0.25)),
         )
         allocation = parsed if parsed.ok else cash_allocation(pool)
+        stock_returns = metadata.get("stock_returns", {})
+        excess_returns = metadata.get("excess_returns", {})
+        stock_info = metadata.get("stock_info", {})
+        has_embedded_outcomes = bool(
+            stock_returns and excess_returns and stock_info
+        )
+        open_market_episodes_only = (
+            not has_embedded_outcomes
+            and str(metadata.get("universe", "")) == "all_ashare_point_in_time"
+        )
+        if not has_embedded_outcomes and not open_market_episodes_only:
+            print(f"    [trader {month}] incomplete task metadata")
+            return
+        if open_market_episodes_only:
+            active_codes = [
+                code
+                for code, weight in allocation.weights.items()
+                if float(weight) > 0.0
+            ]
+            database_path = os.getenv("ASHARE_OPEN_DB", "")
+            if not database_path:
+                print(
+                    f"    [trader {month}] ASHARE_OPEN_DB is required "
+                    "for open-market episode logging"
+                )
+                return
+            try:
+                stock_returns = _open_market_holding_returns(
+                    database_path,
+                    active_codes,
+                    entry_date,
+                    exit_date,
+                )
+            except Exception as exc:
+                print(
+                    f"    [trader {month}] open-market return loading failed: {exc}"
+                )
+                return
+            index_return = float(metadata.get("index_return", 0.0))
+            excess_returns = {
+                code: value - index_return
+                for code, value in stock_returns.items()
+            }
+            print(
+                f"    [trader {month}] open-market episodes-only: "
+                f"loaded_returns={len(stock_returns)}"
+            )
         episode_notional = float(
             self.cfg.memory.get("trader_episode_notional", 1_000_000.0)
         )
@@ -1819,39 +1896,40 @@ class BenchmarkEvaluator(ABC):
         policy: AnchorPolicy | None = None
         snapshot: Mapping[str, Any] | None = None
         anchor_attribution: dict[str, Any] | None = None
-        try:
-            policy = AnchorPolicy.from_mapping(metadata.get("anchor_policy"))
-            raw_snapshot = metadata.get("anchor_snapshot")
-            if raw_snapshot:
-                if not isinstance(raw_snapshot, Mapping):
-                    raise TypeError("anchor_snapshot must be a mapping")
-                snapshot = raw_snapshot
-            else:
-                snapshot = build_anchor_snapshot(
-                    entry_date,
-                    stock_info,
-                    data_dir=ashare_data_dir,
-                    policy=policy,
+        if not open_market_episodes_only:
+            try:
+                policy = AnchorPolicy.from_mapping(metadata.get("anchor_policy"))
+                raw_snapshot = metadata.get("anchor_snapshot")
+                if raw_snapshot:
+                    if not isinstance(raw_snapshot, Mapping):
+                        raise TypeError("anchor_snapshot must be a mapping")
+                    snapshot = raw_snapshot
+                else:
+                    snapshot = build_anchor_snapshot(
+                        entry_date,
+                        stock_info,
+                        data_dir=ashare_data_dir,
+                        policy=policy,
+                    )
+                anchor_attribution = evaluate_anchor_deviation(
+                    allocation.weights,
+                    allocation.cash,
+                    snapshot["anchor_weights"],
+                    float(snapshot.get("anchor_cash", 0.0)),
+                    stock_returns,
+                    index_return,
+                    starting_capital=episode_notional,
+                    excess_returns=excess_returns,
+                    open_cost=open_cost,
+                    close_cost=close_cost,
+                    min_cost=min_cost,
+                    actual_result=portfolio_result,
                 )
-            anchor_attribution = evaluate_anchor_deviation(
-                allocation.weights,
-                allocation.cash,
-                snapshot["anchor_weights"],
-                float(snapshot.get("anchor_cash", 0.0)),
-                stock_returns,
-                index_return,
-                starting_capital=episode_notional,
-                excess_returns=excess_returns,
-                open_cost=open_cost,
-                close_cost=close_cost,
-                min_cost=min_cost,
-                actual_result=portfolio_result,
-            )
-            anchor_attribution["market_regime"] = str(
-                snapshot.get("market_breadth", {}).get("regime", "")
-            )
-        except Exception as exc:
-            print(f"    [trader {month}] anchor attribution failed: {exc}")
+                anchor_attribution["market_regime"] = str(
+                    snapshot.get("market_breadth", {}).get("regime", "")
+                )
+            except Exception as exc:
+                print(f"    [trader {month}] anchor attribution failed: {exc}")
 
         satellite_attribution: dict[str, Any] | None = None
         if (
@@ -1901,6 +1979,9 @@ class BenchmarkEvaluator(ABC):
                 active_return=portfolio_result.active_return,
                 total_cost=portfolio_result.total_cost,
                 contributions=portfolio_result.contributions,
+                episode_kind=(
+                    "open_market" if open_market_episodes_only else ""
+                ),
                 anchor_attribution=anchor_attribution,
                 satellite_attribution=satellite_attribution,
                 parse_ok=parsed.ok,
@@ -1908,6 +1989,9 @@ class BenchmarkEvaluator(ABC):
             print(f"    trader[{month}] {operation}")
         except Exception as exc:
             print(f"    [trader {month}] episode logging failed: {exc}")
+
+        if open_market_episodes_only:
+            return
 
         try:
             feature_rows = compute_trader_feature_rows(

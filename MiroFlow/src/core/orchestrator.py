@@ -707,7 +707,9 @@ class Orchestrator:
             task_description, task_file_name
         )
 
-        task_guidence = """
+        task_guidence = ""
+        if self.cfg.main_agent.get("generic_task_guidance_enabled", True):
+            task_guidence = """
 
 Your task is to comprehensively address the question by actively collecting detailed information from the web, and generating a thorough, transparent report. Your goal is NOT to rush a single definitive answer or conclusion, but rather to gather complete information and present ALL plausible candidate answers you find, accompanied by clearly documented supporting evidence, reasoning steps, uncertainties, and explicit intermediate findings.
 
@@ -726,7 +728,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
 """
 
         # Add Chinese-specific guidance if enabled
-        if self.chinese_context:
+        if task_guidence and self.chinese_context:
             task_guidence += """
 
 ## 中文任务处理指导
@@ -742,9 +744,8 @@ Your objective is maximum completeness, transparency, and detailed documentation
 - **过程透明化**：所有步骤描述、状态更新、中间结果等都应使用中文，确保用户理解
 """
 
-        initial_user_content[0]["text"] = (
-            initial_user_content[0]["text"] + task_guidence
-        )
+        if task_guidence:
+            initial_user_content[0]["text"] += task_guidence
 
         hint_notes = ""  # Initialize hint_notes
         if self.cfg.main_agent.input_process.hint_generation:
@@ -807,6 +808,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
             max_turns = sys.maxsize
         turn_count = 0
         task_failed = False  # Track whether task failed
+        assistant_response_text = ""
         while turn_count < max_turns:
             turn_count += 1
             logger.debug(f"\n--- Main Agent Turn {turn_count} ---")
@@ -993,18 +995,32 @@ Your objective is maximum completeness, transparency, and detailed documentation
         # Final summary
         self.task_log.log_step("final_summary", "Generating final summary")
 
-        # Use context limit retry logic to generate final summary
-        final_answer_text = await self._handle_summary_with_context_limit_retry(
-            system_prompt,
-            main_agent_prompt_instance,
-            message_history,
-            tool_definitions,
-            "Final summary generation",
-            task_description,
-            task_failed,
-            agent_type="main",
-            task_guidence=task_guidence,
+        reuse_terminal_response = bool(
+            self.cfg.main_agent.output_process.get("reuse_terminal_response", False)
         )
+        terminal_has_boxed_answer = bool(
+            assistant_response_text
+            and "\\boxed{" in assistant_response_text.replace(" ", "")
+        )
+        if reuse_terminal_response and not task_failed and terminal_has_boxed_answer:
+            final_answer_text = assistant_response_text
+            self.task_log.log_step(
+                "final_summary_reused",
+                "Reused terminal boxed response without another LLM call",
+            )
+        else:
+            # Use context limit retry logic to generate final summary
+            final_answer_text = await self._handle_summary_with_context_limit_retry(
+                system_prompt,
+                main_agent_prompt_instance,
+                message_history,
+                tool_definitions,
+                "Final summary generation",
+                task_description,
+                task_failed,
+                agent_type="main",
+                task_guidence=task_guidence,
+            )
 
         # Handle response result
         if final_answer_text:
