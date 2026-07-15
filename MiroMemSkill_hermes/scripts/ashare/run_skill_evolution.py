@@ -115,6 +115,14 @@ class EvolutionCLI:
 
     # ------------------------------------------------------------ pipeline
 
+    def _resolve_ref(self, ref: str) -> str:
+        """Resolve 'baseline' / 'active' / digest / short_id to a digest."""
+        if ref == "baseline":
+            return self._registry.baseline_digest()
+        if ref == "active":
+            return self._registry.active_digest()
+        return self._registry.resolve(ref)["digest"]
+
     def run_arm(
         self,
         run_id: str,
@@ -123,11 +131,7 @@ class EvolutionCLI:
         level: str = "probe",
         cleanup_db: bool = False,
     ):
-        digest = (
-            self._registry.baseline_digest()
-            if candidate == "baseline"
-            else self._registry.resolve(candidate)["digest"]
-        )
+        digest = self._resolve_ref(candidate)
         skill_dir = self._registry.skill_dir(digest)
         out = self._controller.run_arm(
             run_id, arm, skill_dir, level=level, cleanup_db=cleanup_db
@@ -141,8 +145,13 @@ class EvolutionCLI:
         level: str = "probe",
         n: int = 1,
         temperature: float = 0.9,
+        parent: str = "baseline",
     ):
-        """Generate candidates from a completed arm's settled outcomes."""
+        """Generate candidates from a completed arm's settled outcomes.
+
+        ``parent`` selects the skill the mutation starts from: ``baseline``,
+        ``active`` (current promoted skill), or any registered digest/short_id.
+        """
         from src.evolution.generators import ReflectiveMutationGenerator
 
         tasks, splits = self._controller.tasks_and_splits()
@@ -154,29 +163,32 @@ class EvolutionCLI:
         feedback_path = save_feedback(feedback_arm, feedback)
         print(f"feedback -> {feedback_path}")
 
-        baseline = self._registry.artifact(self._registry.baseline_digest())
+        base = self._registry.artifact(self._resolve_ref(parent))
         generator = ReflectiveMutationGenerator(temperature=temperature)
-        bodies = generator.propose(baseline, feedback, n=n)
+        bodies = generator.propose(base, feedback, n=n)
         if not bodies:
             raise RuntimeError("generator produced no candidate bodies")
 
         registered = []
         for body in bodies:
-            text = f"---\n{baseline.frontmatter}\n---\n\n{body}\n"
+            text = f"---\n{base.frontmatter}\n---\n\n{body}\n"
             from src.evolution.types import SkillArtifact
 
             candidate = SkillArtifact.from_text(
-                text, parent_digest=baseline.digest
+                text, parent_digest=base.digest
             )
-            gate = run_static_gates(baseline, candidate)
+            gate = run_static_gates(base, candidate)
             if not gate.passed:
                 print(f"L0 REJECT: {gate.failures}")
                 continue
             artifact = self._registry.register_candidate(
                 text,
-                parent_digest=baseline.digest,
+                parent_digest=base.digest,
                 generator=generator.name,
-                rationale=f"reflective mutation from {feedback_arm} ({level})",
+                rationale=(
+                    f"reflective mutation from {feedback_arm} "
+                    f"({level}, parent={base.short_id})"
+                ),
             )
             registered.append(artifact.short_id)
             print(f"L0 PASS -> registered candidate {artifact.short_id}")
@@ -243,20 +255,27 @@ class EvolutionCLI:
         n: int = 1,
         cleanup_db: bool = True,
         promote_best: bool = False,
+        base: str = "baseline",
     ):
-        """Full fidelity loop: train(6) -> propose -> dev(3) rank -> holdout(3) best."""
+        """Full fidelity loop: train(6) -> propose -> dev(3) rank -> holdout(3) best.
+
+        ``base`` selects the comparison/parent skill for the whole round:
+        ``baseline`` (registry baseline) or ``active`` (current promoted skill).
+        Round-2 style continued evolution should pass ``--base=active``.
+        """
         run_id = run_id or f"full_{_now_tag()}"
-        print(f"=== full run {run_id} (n={n}) ===")
+        base_digest = self._resolve_ref(base)
+        print(f"=== full run {run_id} (n={n}, base={base}@{base_digest[:12]}) ===")
 
         baseline_train_out = self.run_arm(
             run_id,
             "baseline_train",
-            candidate="baseline",
+            candidate=base,
             level="train",
             cleanup_db=cleanup_db,
         )
         short_ids = self.propose(
-            feedback_arm=baseline_train_out, level="train", n=n
+            feedback_arm=baseline_train_out, level="train", n=n, parent=base
         )
         if not short_ids:
             raise RuntimeError("no candidate survived L0 gates after train propose")
@@ -264,7 +283,7 @@ class EvolutionCLI:
         self.run_arm(
             run_id,
             "baseline_dev",
-            candidate="baseline",
+            candidate=base,
             level="dev",
             cleanup_db=cleanup_db,
         )
@@ -301,7 +320,9 @@ class EvolutionCLI:
             f"(dev score={best_dev['score']:+.4f}, "
             f"mean_paired={best_dev['paired']['mean_diff_pp']:+.2f}pp) ==="
         )
-        holdout_report = self.holdout(best_sid, run_id=run_id, cleanup_db=cleanup_db)
+        holdout_report = self.holdout(
+            best_sid, run_id=run_id, cleanup_db=cleanup_db, base=base
+        )
 
         result = {
             "run_id": run_id,
@@ -320,12 +341,18 @@ class EvolutionCLI:
 
     # ------------------------------------------------------------ sealed
 
-    def holdout(self, candidate: str, run_id: str = "", cleanup_db: bool = True):
+    def holdout(
+        self,
+        candidate: str,
+        run_id: str = "",
+        cleanup_db: bool = True,
+        base: str = "baseline",
+    ):
         """One-shot sealed evaluation; lease is acquired before anything runs."""
         run_id = run_id or f"holdout_{_now_tag()}"
         self._registry.acquire_holdout_lease(candidate, run_id)
         self.run_arm(
-            run_id, "baseline", candidate="baseline", level="holdout", cleanup_db=cleanup_db
+            run_id, "baseline", candidate=base, level="holdout", cleanup_db=cleanup_db
         )
         self.run_arm(
             run_id, "candidate", candidate=candidate, level="holdout", cleanup_db=cleanup_db

@@ -130,32 +130,41 @@ class EvolutionController:
         months: tuple[str, ...] | None = None,
         cleanup_db: bool = False,
         verify_db_sha: bool = False,
+        resume: bool = False,
     ) -> Path:
-        """Run one isolated benchmark arm; returns its output dir."""
+        """Run one isolated benchmark arm; returns its output dir.
+
+        With ``resume=True`` an existing arm is continued: the benchmark
+        skips months that already have attempt JSONs, and the arm DB copy
+        is kept (its tool-write cache stays valid mid-run).
+        """
         tasks, splits = self.tasks_and_splits()
         months = tuple(months) if months else splits.level_months(level)
 
         run_dir = self.run_dir(run_id)
         arm_dir = run_dir / "arms" / arm_name
         out_dir = arm_dir / "out"
-        if out_dir.exists():
-            raise RuntimeError(f"arm output already exists: {out_dir}")
+        if out_dir.exists() and not resume:
+            raise RuntimeError(
+                f"arm output already exists: {out_dir} (pass resume=True to continue)"
+            )
         arm_dir.mkdir(parents=True, exist_ok=True)
 
         data_dir = arm_dir / "data"
         write_task_subset(tasks, months, data_dir)
 
         db_copy = arm_dir / "ashare_pools_arm.db"
-        subprocess.run(
-            [
-                "cp",
-                "--reflink=auto",
-                "--preserve=mode,timestamps",
-                str(self.snapshot_db),
-                str(db_copy),
-            ],
-            check=True,
-        )
+        if not db_copy.exists():
+            subprocess.run(
+                [
+                    "cp",
+                    "--reflink=auto",
+                    "--preserve=mode,timestamps",
+                    str(self.snapshot_db),
+                    str(db_copy),
+                ],
+                check=True,
+            )
 
         store_dir = arm_dir / "memory_bank"
         store_dir.mkdir(parents=True, exist_ok=True)

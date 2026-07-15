@@ -51,6 +51,12 @@ MiroMemSkill_hermes/.ruff_cache/
 # External reference clones / separate remotes (do not nest in MiroFinance)
 Mem0/
 # report/ tracked in-repo (midterm plan, ACL templates)
+report/acl_latex.pdf
+report/acl_latex.aux
+report/acl_latex.bbl
+report/acl_latex.blg
+report/acl_latex.log
+report/acl_latex.out
 
 # Hermes validation runtime logs
 hermes-agent-self-evolution_validation/logs/

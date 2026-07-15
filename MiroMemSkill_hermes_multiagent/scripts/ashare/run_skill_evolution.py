@@ -50,12 +50,16 @@ def _bootstrap_llm_keys(repo_root: Path) -> None:
     """Load llm_key defaults; user-local own_* key files take precedence."""
     for key, value in _load_key_file(repo_root.parent / "llm_key").items():
         os.environ.setdefault(key, value)
-    own_glm = repo_root.parent / "own_glm"
-    if own_glm.exists():
-        token = own_glm.read_text(encoding="utf-8").strip()
-        if token:
-            os.environ["GLM_API_KEY"] = token
-            os.environ["VISION_API_KEY"] = token
+    # Multiagent fork runs on its own GLM quota (own_glm2) so it never
+    # contends with the single-agent hermes evolution runs on own_glm.
+    for glm_name in ("own_glm2", "own_glm"):
+        glm_path = repo_root.parent / glm_name
+        if glm_path.exists():
+            token = glm_path.read_text(encoding="utf-8").strip()
+            if token:
+                os.environ["GLM_API_KEY"] = token
+                os.environ["VISION_API_KEY"] = token
+                break
     own_deepseek = repo_root.parent / "own_deepseek"
     if own_deepseek.exists():
         token = own_deepseek.read_text(encoding="utf-8").strip()
@@ -122,6 +126,7 @@ class EvolutionCLI:
         candidate: str = "baseline",
         level: str = "probe",
         cleanup_db: bool = False,
+        resume: bool = False,
     ):
         digest = (
             self._registry.baseline_digest()
@@ -130,7 +135,7 @@ class EvolutionCLI:
         )
         skill_dir = self._registry.skill_dir(digest)
         out = self._controller.run_arm(
-            run_id, arm, skill_dir, level=level, cleanup_db=cleanup_db
+            run_id, arm, skill_dir, level=level, cleanup_db=cleanup_db, resume=resume
         )
         print(f"arm done -> {out}")
         return str(out)

@@ -14,7 +14,7 @@ for level in train dev holdout; do
   echo "=== [$(date '+%F %T')] arm ${level} start ==="
   python scripts/ashare/run_skill_evolution.py "${SPLITS[@]}" run_arm \
     --run_id="${RUN_ID}" --arm="${level}" --candidate=baseline \
-    --level="${level}" --cleanup_db=True
+    --level="${level}" --cleanup_db=True --resume=True
   rc=$?
   if [ $rc -ne 0 ]; then
     echo "=== [$(date '+%F %T')] arm ${level} FAILED (exit ${rc}) ==="
