@@ -43,6 +43,24 @@ from src.evolution.registry import SkillRegistry  # noqa: E402
 from src.evolution.splits import filter_tasks  # noqa: E402
 
 DEFAULT_SKILL = "memory_bank/skills_ashare/ashare_open_portfolio.md"
+DEFAULT_CONFIG_DEEPSEEK = "agent_ashare_trader_open_hermes_deepseek"
+
+
+def _bootstrap_llm_keys(repo_root: Path) -> None:
+    """Load llm_key defaults; user-local own_* key files take precedence."""
+    for key, value in _load_key_file(repo_root.parent / "llm_key").items():
+        os.environ.setdefault(key, value)
+    own_glm = repo_root.parent / "own_glm"
+    if own_glm.exists():
+        token = own_glm.read_text(encoding="utf-8").strip()
+        if token:
+            os.environ["GLM_API_KEY"] = token
+            os.environ["VISION_API_KEY"] = token
+    own_deepseek = repo_root.parent / "own_deepseek"
+    if own_deepseek.exists():
+        token = own_deepseek.read_text(encoding="utf-8").strip()
+        if token:
+            os.environ["DEEPSEEK_API_KEY"] = token
 
 
 def _now_tag() -> str:
@@ -70,8 +88,7 @@ class EvolutionCLI:
             dev_months=dev_months,
             holdout_months=holdout_months,
         )
-        for key, value in _load_key_file(REPO_ROOT.parent / "llm_key").items():
-            os.environ.setdefault(key, value)
+        _bootstrap_llm_keys(REPO_ROOT)
 
     # ----------------------------------------------------------- lifecycle
 

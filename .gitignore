@@ -1,5 +1,8 @@
 # API keys & tokens (keep locally only)
 *_key
+own_glm
+own_deepseek
+own_*
 tushare_token
 .env
 .env.*

@@ -59,19 +59,73 @@
 
 ---
 
-## MiroMemSkill_hermes：Skill 进化（12 月冒烟，非 Flow/Mem 对比）
+## MiroMemSkill_hermes：Skill 进化（非 Flow/Mem 对比）
 
-与上面 Flow vs MemSkill **不是同一条实验线**——Hermes fork 只改 Skill 正文，Memory 全关，用 train/dev/holdout 切分。
+与上面 Flow vs MemSkill **不是同一条实验线**——Hermes fork 只改 Skill 正文，Memory 全关，fitness 来自确定性回测回放。设计文档：`MiroMemSkill_hermes/docs/hermes_evolution_design.md`
 
-| 阶段 | baseline（原版 Skill） | 候选 `cc249cf4da2d` |
-|------|------------------------|---------------------|
-| train 6 月 | +7.88% | —（用于生成变异） |
+### 24 月正式实验（formal24m_20260715）✅
+
+**设定**
+
+| 项 | 值 |
+|---|---|
+| 模型 | GLM-5.2（`own_glm`，thinking enabled，temp=1.0） |
+| 快照 | `shared/ashare_open_stocks_glm52_24m_20260715/`（755 交易日，DB 本地/LFS） |
+| 切分 | train 12 月（2024-07~2025-06）/ dev 6 月 / holdout 6 月 |
+| 候选数 | 3（reflective mutation from train feedback） |
+| Run ID | `formal24m_20260715` |
+| 报告 | `MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/reports/` |
+
+**三候选 dev 筛选**
+
+| 候选 | dev 门控 | dev 配对均值 | 备注 |
+|------|----------|--------------|------|
+| `b25723dfcf23` | ❌ | -1.96pp | 最大回撤劣化 11.68pp |
+| `cd1ab8517312` | ✅ | +2.46pp | 未进 holdout（dev 分较低） |
+| **`3aebb813bd33`** | ✅ | **+6.78pp** | dev 最高 → 唯一 holdout |
+
+**Dev（2025-07 ~ 2025-12，6 月）— baseline vs `3aebb813bd33`**
+
+| | 总收益 | 超额 | 最大回撤 | 月胜率 |
+|--|--------|------|----------|--------|
+| baseline | +29.35% | +13.83% | -6.52% | 67% |
+| candidate | **+83.53%** | **+68.00%** | **-3.12%** | 67% |
+| 配对 | 5 胜 1 负，均值 **+6.78pp**，sign_p=0.22 | | | |
+
+**Holdout（2026-01 ~ 2026-06，6 月，一次性封存）**
+
+| | 总收益 | 超额 | 最大回撤 | 月胜率 |
+|--|--------|------|----------|--------|
+| baseline | -1.89% | -3.47% | -7.41% | 50% |
+| candidate | **+38.95%** | **+37.37%** | **-3.84%** | 83% |
+| 配对 | 5 胜 1 负，均值 **+5.94pp**，sign_p=0.22 | | | |
+
+Dev 与 holdout 硬门控（无效月、回撤劣化 ≤5pp）均 **PASS**。
+
+**晋升决定：已 promote `3aebb813bd33` → 生产 Skill**
+
+- 时间：2026-07-15，`run_id=formal24m_20260715`
+- 生产文件：`MiroMemSkill_hermes/memory_bank/skills_ashare/ashare_open_portfolio.md`
+- 备份：`.evolution/backups/20260715_111536_0a931278001c.md`（可 `rollback 0a931278001c`）
+- **理由**：24 月正式切分下 dev/holdout 均过硬门控；holdout 配对 +5.94pp 且回撤优于 baseline（-3.84% vs -7.41%）；dev/holdout 方向一致（5/6 月胜出）。
+- **保留**：sign_p=0.22（6 月样本不显著）；temp=1.0 单次运行；dev +83% 偏高，存在过拟合风险——后续应用前建议再跑独立 forward 窗口或重复实验验证。
+
+**候选 Skill 主要新增规则**（相对 baseline `0a931278001c`）
+
+- 动量暴露控制：近 20 日动量分位上限、高动量占比 >40% 时补低波/估值候选
+- 行业/集中度硬约束：申万一级 ≤30%、二级 ≤20%、前三重仓 ≤50%、最少 5 只持仓
+- 广度过热防御：`ashare_market_breadth` 高位时分位触发 CASH ≥30%
+- 剔除垂直拉升、高换手率（>90 分位）个股；整手约束复核
+
+### 12 月冒烟（已 supersede，仅供参考）
+
+| 阶段 | baseline | 候选 `cc249cf4da2d` |
+|------|----------|---------------------|
+| train 6 月 | +7.88% | — |
 | dev 3 月 | -17.39% | -18.44%（配对 -0.59pp） |
-| holdout 3 月 | +13.44% | **+26.05%**（配对 +3.64pp） |
+| holdout 3 月 | +13.44% | +26.05%（配对 +3.64pp） |
 
-- Run ID：`full_20260714_230306`（`MiroMemSkill_hermes/.evolution/runs/`）
-- 生产 Skill **未 promote**；holdout 仅 3 月，`sign_p=1.0`，不能当正式结论。
-- 设计文档：`MiroMemSkill_hermes/docs/hermes_evolution_design.md`
+Run ID：`full_20260714_230306`。未 promote（holdout 仅 3 月，sign_p=1.0）。
 
 ---
 
@@ -83,9 +137,9 @@
 | `MiroMemSkill/` | Memory + Skill 运行时 |
 | `MiroMemSkill_hermes/` | Skill 自进化 fork（Hermes 思路 + 真实回测 fitness） |
 | `shared/ashare_open_stocks_glm52_20260714/` | 12 月冻结快照 + 对比报告 |
-| `shared/ashare_open_stocks_glm52_24m_20260715/` | 24 月扩展快照（进行中） |
+| `shared/ashare_open_stocks_glm52_24m_20260715/` | 24 月扩展快照（train/dev/holdout 任务 + manifest；DB 本地） |
 | `任务要求.txt` | 研究任务与 ablation 要求 |
 
 ---
 
-*最后更新：2026-07-15*
+*最后更新：2026-07-15（24m 正式实验 + promote `3aebb813bd33`）*

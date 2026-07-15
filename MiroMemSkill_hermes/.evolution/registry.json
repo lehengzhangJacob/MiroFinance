@@ -2,7 +2,7 @@
   "skill_name": "ashare_open_portfolio",
   "skill_rel_path": "memory_bank/skills_ashare/ashare_open_portfolio.md",
   "baseline_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
-  "active_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+  "active_digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
   "created_at": "2026-07-14T14:16:10+00:00",
   "candidates": {
     "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7": {
@@ -201,13 +201,319 @@
           ]
         }
       }
+    },
+    "b25723dfcf23a523b1e02a3cfc181df774f615139d3cdb881f6f92e5ca1baee7": {
+      "digest": "b25723dfcf23a523b1e02a3cfc181df774f615139d3cdb881f6f92e5ca1baee7",
+      "short_id": "b25723dfcf23",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline_train/out (train)",
+      "status": "gates_failed",
+      "created_at": "2026-07-14T20:41:03+00:00",
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-14T21:18:40+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline_dev/out",
+            "total_return": 0.293536,
+            "index_return": 0.155286,
+            "excess_return": 0.13825,
+            "max_drawdown": -0.065158,
+            "worst_month": -0.065158,
+            "win_rate": 0.6667,
+            "fees": 9356.11,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/candidate_dev_b25723dfcf23/out",
+            "total_return": 0.132159,
+            "index_return": 0.155286,
+            "excess_return": -0.023127,
+            "max_drawdown": -0.181914,
+            "worst_month": -0.115253,
+            "win_rate": 0.6667,
+            "fees": 11201.74,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-07-04",
+              "2025-08-01",
+              "2025-09-01",
+              "2025-10-09",
+              "2025-11-06",
+              "2025-12-04"
+            ],
+            "diffs_pp": [
+              0.1875,
+              6.3511,
+              -8.2074,
+              -0.8718,
+              -5.0095,
+              -4.2211
+            ],
+            "mean_diff_pp": -1.9619,
+            "stdev_diff_pp": 5.0658,
+            "wins": 2,
+            "losses": 4,
+            "ties": 0,
+            "sign_test_p": 0.6875
+          },
+          "gates": {
+            "passed": false,
+            "failures": [
+              "max drawdown degraded by 11.68pp (> 5.0pp cap)"
+            ]
+          },
+          "score": -4.88081,
+          "run_id": "formal24m_20260715",
+          "months": [
+            "2025-07-04",
+            "2025-08-01",
+            "2025-09-01",
+            "2025-10-09",
+            "2025-11-06",
+            "2025-12-04"
+          ]
+        }
+      }
+    },
+    "cd1ab8517312828aab11490d08e9a5ac7e70bd246d1fd93226c0e5f3affc75ad": {
+      "digest": "cd1ab8517312828aab11490d08e9a5ac7e70bd246d1fd93226c0e5f3affc75ad",
+      "short_id": "cd1ab8517312",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline_train/out (train)",
+      "status": "dev_evaluated",
+      "created_at": "2026-07-14T20:41:03+00:00",
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-14T21:38:28+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline_dev/out",
+            "total_return": 0.293536,
+            "index_return": 0.155286,
+            "excess_return": 0.13825,
+            "max_drawdown": -0.065158,
+            "worst_month": -0.065158,
+            "win_rate": 0.6667,
+            "fees": 9356.11,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/candidate_dev_cd1ab8517312/out",
+            "total_return": 0.429772,
+            "index_return": 0.155286,
+            "excess_return": 0.274485,
+            "max_drawdown": -0.078832,
+            "worst_month": -0.078832,
+            "win_rate": 0.6667,
+            "fees": 10619.11,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-07-04",
+              "2025-08-01",
+              "2025-09-01",
+              "2025-10-09",
+              "2025-11-06",
+              "2025-12-04"
+            ],
+            "diffs_pp": [
+              -12.8531,
+              26.593,
+              2.1472,
+              1.8218,
+              -1.3674,
+              -1.5934
+            ],
+            "mean_diff_pp": 2.458,
+            "stdev_diff_pp": 13.0267,
+            "wins": 3,
+            "losses": 3,
+            "ties": 0,
+            "sign_test_p": 1.0
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": 2.116158,
+          "run_id": "formal24m_20260715",
+          "months": [
+            "2025-07-04",
+            "2025-08-01",
+            "2025-09-01",
+            "2025-10-09",
+            "2025-11-06",
+            "2025-12-04"
+          ]
+        }
+      }
+    },
+    "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4": {
+      "digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
+      "short_id": "3aebb813bd33",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline_train/out (train)",
+      "status": "promoted",
+      "created_at": "2026-07-14T20:41:03+00:00",
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-14T21:57:27+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline_dev/out",
+            "total_return": 0.293536,
+            "index_return": 0.155286,
+            "excess_return": 0.13825,
+            "max_drawdown": -0.065158,
+            "worst_month": -0.065158,
+            "win_rate": 0.6667,
+            "fees": 9356.11,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/candidate_dev_3aebb813bd33/out",
+            "total_return": 0.835316,
+            "index_return": 0.155286,
+            "excess_return": 0.68003,
+            "max_drawdown": -0.031199,
+            "worst_month": -0.021824,
+            "win_rate": 0.6667,
+            "fees": 11595.32,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-07-04",
+              "2025-08-01",
+              "2025-09-01",
+              "2025-10-09",
+              "2025-11-06",
+              "2025-12-04"
+            ],
+            "diffs_pp": [
+              12.5867,
+              19.8841,
+              4.8218,
+              -2.8532,
+              4.3333,
+              1.881
+            ],
+            "mean_diff_pp": 6.7756,
+            "stdev_diff_pp": 8.1493,
+            "wins": 5,
+            "losses": 1,
+            "ties": 0,
+            "sign_test_p": 0.21875
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": 6.7756,
+          "run_id": "formal24m_20260715",
+          "months": [
+            "2025-07-04",
+            "2025-08-01",
+            "2025-09-01",
+            "2025-10-09",
+            "2025-11-06",
+            "2025-12-04"
+          ]
+        },
+        "fitness_holdout": {
+          "at": "2026-07-14T22:33:15+00:00",
+          "level": "holdout",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline/out",
+            "total_return": -0.018943,
+            "index_return": 0.015795,
+            "excess_return": -0.034738,
+            "max_drawdown": -0.074097,
+            "worst_month": -0.074097,
+            "win_rate": 0.5,
+            "fees": 7558.51,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/candidate/out",
+            "total_return": 0.38952,
+            "index_return": 0.015795,
+            "excess_return": 0.373725,
+            "max_drawdown": -0.038379,
+            "worst_month": -0.038379,
+            "win_rate": 0.8333,
+            "fees": 10270.07,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2026-01-05",
+              "2026-02-02",
+              "2026-03-10",
+              "2026-04-08",
+              "2026-05-11",
+              "2026-06-08"
+            ],
+            "diffs_pp": [
+              -3.5428,
+              3.346,
+              12.2713,
+              0.0438,
+              9.3952,
+              14.1269
+            ],
+            "mean_diff_pp": 5.9401,
+            "stdev_diff_pp": 7.0777,
+            "wins": 5,
+            "losses": 1,
+            "ties": 0,
+            "sign_test_p": 0.21875
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": 5.9401,
+          "run_id": "formal24m_20260715",
+          "months": [
+            "2026-01-05",
+            "2026-02-02",
+            "2026-03-10",
+            "2026-04-08",
+            "2026-05-11",
+            "2026-06-08"
+          ]
+        }
+      }
     }
   },
   "holdout_leases": {
     "cc249cf4da2d153f97effad6053a5cb9ac0cabd2cf963ab1cac7c31d810afd8c": {
       "run_id": "full_20260714_230306",
       "acquired_at": "2026-07-14T15:50:44+00:00"
+    },
+    "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4": {
+      "run_id": "formal24m_20260715",
+      "acquired_at": "2026-07-14T21:57:27+00:00"
     }
   },
-  "promotions": []
+  "promotions": [
+    {
+      "digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
+      "previous_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
+      "run_id": "formal24m_20260715",
+      "backup": ".evolution/backups/20260715_111536_0a931278001c.md",
+      "at": "2026-07-15T03:15:36+00:00"
+    }
+  ]
 }
