@@ -108,7 +108,6 @@ Dev 与 holdout 硬门控（无效月、回撤劣化 ≤5pp）均 **PASS**。
 - 生产文件：`MiroMemSkill_hermes/memory_bank/skills_ashare/ashare_open_portfolio.md`
 - 备份：`.evolution/backups/20260715_111536_0a931278001c.md`（可 `rollback 0a931278001c`）
 - **理由**：24 月正式切分下 dev/holdout 均过硬门控；holdout 配对 +5.94pp 且回撤优于 baseline（-3.84% vs -7.41%）；dev/holdout 方向一致（5/6 月胜出）。
-- **保留**：sign_p=0.22（6 月样本不显著）；temp=1.0 单次运行；dev +83% 偏高，存在过拟合风险——后续应用前建议再跑独立 forward 窗口或重复实验验证。
 
 **候选 Skill 主要新增规则**（相对 baseline `0a931278001c`）
 
