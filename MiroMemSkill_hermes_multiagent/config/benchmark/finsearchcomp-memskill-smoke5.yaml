@@ -1,0 +1,19 @@
+defaults:
+  - default
+  - _self_
+
+name: "finsearchcomp-memskill-smoke5"
+
+data:
+  data_dir: "${data_dir}/finsearchcomp"
+  metadata_file: "standardized_data.jsonl"
+  whitelist:
+    - "(T2)Simple_Historical_Lookup_001"
+    - "(T2)Simple_Historical_Lookup_002"
+    - "(T2)Simple_Historical_Lookup_023"
+    - "(T3)Complex_Historical_Investigation_002"
+    - "(T3)Complex_Historical_Investigation_068"
+
+execution:
+  max_concurrent: 2
+  pass_at_k: 1

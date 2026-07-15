@@ -61,6 +61,19 @@ hermes-agent-self-evolution/.pytest_cache/
 hermes-agent-self-evolution/*.egg-info/
 hermes-agent-self-evolution/datasets/**/*.jsonl
 
+# MiroMemSkill_hermes_multiagent fork: same runtime exclusions as hermes
+MiroMemSkill_hermes_multiagent/.evolution/runs/
+MiroMemSkill_hermes_multiagent/.evolution/nohup/
+MiroMemSkill_hermes_multiagent/.evolution/.registry.lock
+MiroMemSkill_hermes_multiagent/logs/
+MiroMemSkill_hermes_multiagent/.venv/
+MiroMemSkill_hermes_multiagent/memory_bank/*.jsonl
+MiroMemSkill_hermes_multiagent/memory_bank/*.db
+MiroMemSkill_hermes_multiagent/memory_bank/*.db-*
+
+# Upstream reference clone (read-only study copy)
+original_MiroFlow/
+
 # Python / runtime
 __pycache__/
 *.py[cod]

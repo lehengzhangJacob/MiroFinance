@@ -1,0 +1,29 @@
+# tushare_skill 默认配置。run.py 启动时读取；命令行参数可覆盖 defaults。
+api_url: "http://api.tushare.pro"
+
+token:
+  env_var: "TUSHARE_TOKEN"
+  # 显式 token 文件路径（可选）。留空则从技能目录逐级向上查找名为
+  # `token_walk_filename` 的文件（本仓库根目录已有 tushare_token）。
+  file: ""
+  token_walk_filename: "tushare_token"
+
+request:
+  timeout_seconds: 60
+  max_retries: 3          # 限频/网络错误的重试次数
+  backoff_seconds: 5      # 重试间隔基数（指数退避：5s/10s/20s）
+
+defaults:
+  index_code: "000300.SH" # 沪深300
+  adjust: "qfq"           # daily 默认前复权；--adjust raw 关闭
+  exchange: "SSE"         # trade_cal 默认交易所
+
+# 各接口默认返回字段（与仓库回测管线同口径）。--fields 可整体覆盖。
+fields:
+  daily: "ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount"
+  adj_factor: "trade_date,adj_factor"
+  index_daily: "ts_code,trade_date,open,high,low,close,vol,amount"
+  daily_basic: "ts_code,trade_date,pe_ttm,pb,ps_ttm,turnover_rate,total_mv,circ_mv"
+  fina_indicator: "ts_code,ann_date,end_date,eps,roe,grossprofit_margin,netprofit_margin,or_yoy,netprofit_yoy"
+  stock_basic: "ts_code,symbol,name,area,industry,market,list_date"
+  trade_cal: "cal_date,is_open"

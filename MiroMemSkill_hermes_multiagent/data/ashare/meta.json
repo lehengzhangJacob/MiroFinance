@@ -1,0 +1,76 @@
+{
+  "fetched_at": "2026-07-10T18:24:35",
+  "start_date": "20230101",
+  "end_date": "20250731",
+  "index_code": "000300.SH",
+  "stock_pool": {
+    "603259.SH": {
+      "name": "药明康德",
+      "industry": "医药外包"
+    },
+    "002415.SZ": {
+      "name": "海康威视",
+      "industry": "安防"
+    },
+    "601899.SH": {
+      "name": "紫金矿业",
+      "industry": "有色金属"
+    },
+    "601021.SH": {
+      "name": "春秋航空",
+      "industry": "航空"
+    },
+    "300012.SZ": {
+      "name": "华测检测",
+      "industry": "检测服务"
+    },
+    "688005.SH": {
+      "name": "容百科技",
+      "industry": "锂电材料"
+    },
+    "603345.SH": {
+      "name": "安井食品",
+      "industry": "速冻食品"
+    },
+    "601155.SH": {
+      "name": "新城控股",
+      "industry": "房地产"
+    },
+    "002507.SZ": {
+      "name": "涪陵榨菜",
+      "industry": "食品"
+    },
+    "002508.SZ": {
+      "name": "老板电器",
+      "industry": "厨电"
+    },
+    "601233.SH": {
+      "name": "桐昆股份",
+      "industry": "化纤"
+    },
+    "688169.SH": {
+      "name": "石头科技",
+      "industry": "智能清洁电器"
+    },
+    "688981.SH": {
+      "name": "中芯国际",
+      "industry": "晶圆代工"
+    },
+    "300476.SZ": {
+      "name": "胜宏科技",
+      "industry": "PCB"
+    },
+    "002371.SZ": {
+      "name": "北方华创",
+      "industry": "半导体设备"
+    },
+    "600418.SH": {
+      "name": "江淮汽车",
+      "industry": "汽车"
+    }
+  },
+  "optional_datasets": {
+    "daily_basic": true,
+    "fina_indicator": true
+  }
+}

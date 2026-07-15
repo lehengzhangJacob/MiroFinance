@@ -1,0 +1,37 @@
+# Unified trader memory: factual portfolio episodes plus matured factor IC.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+
+# Required: one ID is shared by the 12 months of a run.  A new run must use a
+# new ID, preventing an earlier experiment from entering the current backtest.
+namespace: "ashare_trader_${oc.env:ASHARE_TRADER_RUN_ID}"
+
+# Generic semantic lessons are disabled. Trader mode injects deterministic
+# episodes and FDR-controlled factor reliability through dedicated paths.
+inject_top_k: 0
+inject_enabled: false
+skill_top_k: 1
+skill_enabled: true
+# Always inject the full top-matched trader skill; the task has exact portfolio
+# triggers, and MCP skill_load is intentionally unavailable in this benchmark.
+skill_preview_min_score: 0.0
+skill_list_others: false
+
+calibration_enabled: false
+calibration_mode: "off"
+reflection_enabled: true
+reflection_mode: "trader"
+rank_factor_min_months: 3
+rank_factor_fdr_q: 0.10
+rank_factor_status_enabled: false
+trader_episode_max: 3
+trader_episode_notional: 1000000
+
+outcome_logging_enabled: false
+feature_evidence_enabled: false
+expose_memory_search: "never"
+expose_memory_save: false
+embedding_model: "embedding-3"

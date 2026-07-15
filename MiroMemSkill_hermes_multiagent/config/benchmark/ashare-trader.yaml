@@ -1,0 +1,31 @@
+# Monthly unified 16-stock portfolio-allocation benchmark (12 tasks).
+defaults:
+  - default
+  - _self_
+
+name: "ashare-trader"
+
+data:
+  data_dir: "${data_dir}/ashare_trader"
+  metadata_file: "standardized_data.jsonl"
+  whitelist: []
+
+execution:
+  max_tasks: null
+  max_concurrent: 1
+  pass_at_k: 1
+  task_order: monthly
+
+anchor_policy:
+  enabled: false
+  mode: legacy
+  min_top4_weight: 0.60
+  momentum_window: 20
+  top_k: 4
+  min_top4_holdings: 3
+  max_non_top4_holdings: 1
+  min_independent_risk_signals: 2
+  max_stock_weight: 0.25
+  candidate_limit: 6
+
+openai_api_key: "${oc.env:OPENAI_API_KEY,unused-for-deterministic-trader-judge}"

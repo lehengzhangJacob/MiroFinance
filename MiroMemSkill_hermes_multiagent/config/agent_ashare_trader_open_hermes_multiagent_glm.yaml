@@ -1,0 +1,117 @@
+defaults:
+  - benchmark: ashare-trader-open
+  - memory: ashare_trader_hermes_skillonly
+  - override hydra/job_logging: none
+  - _self_
+
+# Multi-agent variant of agent_ashare_trader_open_hermes_glm:
+# main agent keeps regime tools + skill injection and delegates screening /
+# deep-dive to two specialized sub-agents over the same ashare-open MCP server.
+# All three agents share one GLM key; the framework builds exactly two LLM
+# clients (main + one shared sub client from the first sub-agent entry).
+
+main_agent:
+  prompt_class: MainAgentPromptBoxedDeepSeek
+  generic_task_guidance_enabled: false
+  llm:
+    provider_class: "GPTOpenAIClient"
+    model_name: "glm-5.2"
+    async_client: true
+    thinking_mode: enabled
+    temperature: 1.0
+    top_p: 1.0
+    min_p: 0.0
+    top_k: -1
+    # GLM-5.2 spends heavily on reasoning tokens before the visible answer.
+    max_tokens: 32000
+    openai_api_key: "${oc.env:GLM_API_KEY,???}"
+    openai_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+    keep_tool_result: 6
+    oai_tool_thinking: false
+
+  tool_config:
+    - tool-ashare-open
+  # Main agent keeps only regime tools (universe stats, breadth, index);
+  # execution tools live on the sub-agents so screening tables never
+  # enter the main context.
+  tool_blacklist:
+    - ["tool-ashare-open", "ashare_screen_market"]
+    - ["tool-ashare-open", "ashare_stock_info"]
+    - ["tool-ashare-open", "ashare_price_history"]
+    - ["tool-ashare-open", "ashare_valuation"]
+    - ["tool-ashare-open", "ashare_compare_growth_quality"]
+    - ["tool-ashare-open", "ashare_financials"]
+
+  max_turns: 24
+  max_tool_calls_per_turn: 16
+  input_process:
+    hint_generation: false
+    hint_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  output_process:
+    final_answer_extraction: false
+    reuse_terminal_response: true
+    final_answer_llm_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+  openai_api_key: "${oc.env:GLM_API_KEY,???}"
+  add_message_id: true
+  keep_tool_result: 6
+  chinese_context: "${oc.env:CHINESE_CONTEXT,true}"
+
+sub_agents:
+  agent-screener:
+    prompt_class: SubAgentAShareScreenerPrompt
+    llm:
+      provider_class: "GPTOpenAIClient"
+      model_name: "glm-5.2"
+      async_client: true
+      thinking_mode: enabled
+      temperature: 1.0
+      top_p: 1.0
+      min_p: 0.0
+      top_k: -1
+      max_tokens: 32000
+      openai_api_key: "${oc.env:GLM_API_KEY,???}"
+      openai_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+      keep_tool_result: 6
+      oai_tool_thinking: false
+    tool_config:
+      - tool-ashare-open
+    # Screener: whole-market screening + per-stock market data.
+    tool_blacklist:
+      - ["tool-ashare-open", "ashare_universe_stats"]
+      - ["tool-ashare-open", "ashare_index_history"]
+      - ["tool-ashare-open", "ashare_market_breadth"]
+      - ["tool-ashare-open", "ashare_compare_growth_quality"]
+      - ["tool-ashare-open", "ashare_financials"]
+    max_turns: 10
+    max_tool_calls_per_turn: 8
+
+  agent-analyst:
+    prompt_class: SubAgentAShareAnalystPrompt
+    llm:
+      provider_class: "GPTOpenAIClient"
+      model_name: "glm-5.2"
+      async_client: true
+      thinking_mode: enabled
+      temperature: 1.0
+      top_p: 1.0
+      min_p: 0.0
+      top_k: -1
+      max_tokens: 32000
+      openai_api_key: "${oc.env:GLM_API_KEY,???}"
+      openai_base_url: "${oc.env:GLM_BASE_URL,https://open.bigmodel.cn/api/paas/v4}"
+      keep_tool_result: 6
+      oai_tool_thinking: false
+    tool_config:
+      - tool-ashare-open
+    # Analyst: batch growth/quality cross-check + per-stock fundamentals.
+    tool_blacklist:
+      - ["tool-ashare-open", "ashare_universe_stats"]
+      - ["tool-ashare-open", "ashare_index_history"]
+      - ["tool-ashare-open", "ashare_market_breadth"]
+      - ["tool-ashare-open", "ashare_screen_market"]
+      - ["tool-ashare-open", "ashare_stock_info"]
+    max_turns: 10
+    max_tool_calls_per_turn: 8
+
+output_dir: logs/
+data_dir: "${oc.env:DATA_DIR,data}"

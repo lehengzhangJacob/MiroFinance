@@ -1,0 +1,10 @@
+defaults:
+  - ashare_trader_mem0
+  - _self_
+
+# Runtime injects core-satellite policy/candidates; skill preview adds trader playbooks.
+skill_enabled: true
+skill_top_k: 1
+
+# Every attribution experiment must opt into an isolated, explicit run namespace.
+namespace: "ashare_trader_core_satellite_attribution_${oc.env:ASHARE_TRADER_RUN_ID}"

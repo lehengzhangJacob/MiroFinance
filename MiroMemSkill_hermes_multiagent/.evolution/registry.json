@@ -1,0 +1,22 @@
+{
+  "skill_name": "ashare_open_portfolio",
+  "skill_rel_path": "memory_bank/skills_ashare/ashare_open_portfolio.md",
+  "baseline_digest": "6ead2da29106627feda3ea14fb6ce5cc840fadb9c06e60391db96642f53efddc",
+  "active_digest": "6ead2da29106627feda3ea14fb6ce5cc840fadb9c06e60391db96642f53efddc",
+  "created_at": "2026-07-15T05:54:25+00:00",
+  "candidates": {
+    "6ead2da29106627feda3ea14fb6ce5cc840fadb9c06e60391db96642f53efddc": {
+      "digest": "6ead2da29106627feda3ea14fb6ce5cc840fadb9c06e60391db96642f53efddc",
+      "short_id": "6ead2da29106",
+      "name": "ashare_open_portfolio",
+      "parent_digest": null,
+      "generator": "baseline",
+      "rationale": "",
+      "status": "baseline",
+      "created_at": "2026-07-15T05:54:25+00:00",
+      "reports": {}
+    }
+  },
+  "holdout_leases": {},
+  "promotions": []
+}

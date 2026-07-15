@@ -1,0 +1,37 @@
+# Memory v3: expanding-window statistical reflection.
+#
+# No per-task or single-month LLM lessons are stored.  Rules are discovered
+# from fixed thresholds over all matured 20-day labels, then must pass a
+# temporal holdout, cross-month consistency, lift and FDR gates.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_mem0v3"
+inject_top_k: 3
+skill_top_k: 3
+skill_enabled: true
+reflection_enabled: true
+reflection_mode: "rolling"
+calibration_enabled: true
+calibration_min_samples: 64
+embedding_model: "embedding-3"
+inject_enabled: true
+skill_preview_min_score: 2.0
+
+# Large-sample gates.  With 16 stocks per month, the first possible rules use
+# at least six matured months (96 rows) and reserve the latest two for temporal
+# validation.
+rolling_min_samples: 64
+rolling_min_history_months: 6
+rolling_validation_months: 2
+rolling_min_train_support: 16
+rolling_min_validation_support: 8
+rolling_min_support_months: 4
+rolling_min_validation_months: 2
+rolling_min_accuracy: 0.60
+rolling_min_lift: 0.08
+rolling_min_month_consistency: 0.60
+rolling_fdr_q: 0.10
+rolling_max_rules: 3

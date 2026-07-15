@@ -1,0 +1,19 @@
+# Memory v2: monthly cross-sectional reflection (n=16 evidence per lesson)
+# plus self-calibration injection, replacing per-task n=1 outcome lessons that
+# provably amplified the agent's bearish prior (mem0 v1 run: 87% 跑输).
+# Fresh namespace; run with benchmark.execution.task_order=monthly.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "memory_bank"
+skills_dir: "memory_bank/skills_ashare"
+namespace: "ashare_mem0v2"
+inject_top_k: 3
+skill_top_k: 3
+skill_enabled: true
+reflection_enabled: true
+reflection_mode: "monthly"
+calibration_enabled: true
+embedding_model: "embedding-3"
+inject_enabled: true
+skill_preview_min_score: 2.0

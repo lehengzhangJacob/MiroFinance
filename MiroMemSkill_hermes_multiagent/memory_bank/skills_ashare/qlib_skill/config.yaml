@@ -1,0 +1,39 @@
+# qlib_skill 默认配置。路径相对本技能目录解析；命令行参数可覆盖。
+data:
+  # Tushare CSV 缓存（fetch_data.py / tushare_skill 产出）
+  csv_cache_dir: "../../../data/ashare"
+  # convert 输出 & qlib.init 的 provider_uri
+  provider_uri: "../../../data/qlib_ashare"
+  # 回测基准（convert 会把 index_000300.SH.csv 转成该 instrument）
+  benchmark: "SH000300"
+
+experiment:
+  # 20 交易日前瞻收益，与 A 股 agent benchmark 同 horizon。
+  # 生成表达式: Ref($close,-(h+1))/Ref($close,-1)-1
+  label_horizon: 20
+  segments:
+    train: ["2023-01-01", "2024-06-30"]
+    valid: ["2024-07-01", "2024-12-31"]
+    test:  ["2025-01-01", "2025-06-30"]
+  # Alpha158 handler 的数据起止（含特征回看窗口）
+  handler_start: "2023-01-01"
+  handler_end: "2025-06-30"
+  lgbm:
+    loss: "mse"
+    learning_rate: 0.05
+    max_depth: 6
+    num_leaves: 31
+    num_boost_round: 200
+    early_stopping_rounds: 30
+    seed: 42
+
+backtest:
+  topk: 3
+  n_drop: 1
+  account: 1000000
+  deal_price: "close"
+  open_cost: 0.0005
+  close_cost: 0.0015
+  min_cost: 5
+
+output_dir: "outputs"
