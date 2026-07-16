@@ -341,15 +341,18 @@ def render_report_markdown(report: dict) -> str:
         "",
         f"Months: {', '.join(report.get('months', []))}",
         "",
-        "| arm | total | index | excess | maxDD | worst | win | fees |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| arm | total | index | excess | maxDD | sharpe | worst | win | fees |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for label, arm in (("baseline", base), ("candidate", cand)):
+        sharpe = arm.get("annualized_sharpe")
+        sharpe_cell = f"{sharpe:.2f}" if sharpe is not None else "—"
         lines.append(
             f"| {label} | {arm['total_return']*100:+.2f}% "
             f"| {arm['index_return']*100:+.2f}% "
             f"| {arm['excess_return']*100:+.2f}% "
             f"| {arm['max_drawdown']*100:.2f}% "
+            f"| {sharpe_cell} "
             f"| {arm['worst_month']*100:+.2f}% "
             f"| {arm['win_rate']*100:.0f}% "
             f"| {arm['fees']:.0f} |"

@@ -79,6 +79,7 @@ def evaluate_arm(
         "index_return": index_total - 1.0,
         "excess_return": total - (index_total - 1.0),
         "max_drawdown": metrics["max_drawdown"],
+        "annualized_sharpe": metrics["annualized_sharpe"],
         "worst_month": metrics["worst_month"],
         "win_rate": metrics["win_rate"],
         "fees": metrics["fees"],
@@ -156,12 +157,16 @@ def fitness_report(
     gates = hard_gates(baseline_arm, candidate_arm)
 
     def _summary(arm: dict) -> dict:
+        sharpe = arm.get("annualized_sharpe")
         return {
             "run_dir": arm["run_dir"],
             "total_return": round(arm["total_return"], 6),
             "index_return": round(arm["index_return"], 6),
             "excess_return": round(arm["excess_return"], 6),
             "max_drawdown": round(arm["max_drawdown"], 6),
+            "annualized_sharpe": (
+                round(sharpe, 4) if sharpe is not None else None
+            ),
             "worst_month": round(arm["worst_month"], 6),
             "win_rate": round(arm["win_rate"], 4),
             "fees": round(arm["fees"], 2),

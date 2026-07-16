@@ -174,6 +174,8 @@ def main() -> None:
                 "months": f"{seg_months[0]}..{seg_months[-1]}",
                 "baseline_total": report["baseline"]["total_return"],
                 "r1_total": report["candidate"]["total_return"],
+                "baseline_sharpe": report["baseline"].get("annualized_sharpe"),
+                "r1_sharpe": report["candidate"].get("annualized_sharpe"),
                 "mean_paired_diff_pp": report["paired"]["mean_diff_pp"],
                 "wins": report["paired"]["wins"],
                 "losses": report["paired"]["losses"],

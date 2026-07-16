@@ -24,6 +24,7 @@ def _arm(months: list[dict], total: float) -> dict:
         "index_return": 0.005,
         "excess_return": total - 0.005,
         "max_drawdown": -0.08,
+        "annualized_sharpe": 1.234,
         "worst_month": min(float(m["net"]) for m in months),
         "win_rate": 0.5,
         "fees": 2500.0,
@@ -114,6 +115,8 @@ def test_mock_end_to_end_flow(skill_repo, baseline_text):
 
     markdown = render_report_markdown({**report, "run_id": "mock", "months": []})
     assert "Fitness report" in markdown and "Hard gates: PASS" in markdown
+    # Unified five-metric header: sharpe column must render for both arms.
+    assert "| sharpe |" in markdown and "| 1.23 |" in markdown
 
     registry.promote(registered.short_id, run_id="mock")
     assert registry.active_digest() == registered.digest

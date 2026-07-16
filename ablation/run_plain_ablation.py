@@ -44,6 +44,21 @@ EPISODE_RE = re.compile(
     r"trader\[\d{4}-\d{2}\] (ADD|UPDATE) trader episode"
 )
 
+METRIC_KEYS = (
+    "total_return",
+    "index_return",
+    "excess_return",
+    "max_drawdown",
+    "annualized_sharpe",
+    "worst_month",
+    "win_rate",
+    "fees",
+)
+
+
+def _fmt_sharpe(value: float | None) -> str:
+    return f"{value:.2f}" if value is not None else "—"
+
 
 def _load_own_glm6() -> None:
     """Force own_glm6 (first line of the file is the key; rest is notes)."""
@@ -203,18 +218,7 @@ def main() -> None:
                 "config_name": CONFIG_NAME,
                 "arm": ARM_NAME,
                 "role": "plain_control_no_skill_no_memory",
-                "metrics": {
-                    k: arm[k]
-                    for k in (
-                        "total_return",
-                        "index_return",
-                        "excess_return",
-                        "max_drawdown",
-                        "worst_month",
-                        "win_rate",
-                        "fees",
-                    )
-                },
+                "metrics": {k: arm[k] for k in METRIC_KEYS},
                 "arm_check": arm_check,
                 "note": (
                     "plain control arm of the leave-one-out matrix around "
@@ -230,12 +234,13 @@ def main() -> None:
                 f"# Plain control — {seg_name} run={run_id}\n\n"
                 "Skill: none | memory: none\n\n"
                 f"Months: {', '.join(seg_months)}\n\n"
-                f"| total | index | excess | maxDD | worst | win | fees |\n"
-                f"|---:|---:|---:|---:|---:|---:|---:|\n"
+                f"| total | index | excess | maxDD | sharpe | worst | win | fees |\n"
+                f"|---:|---:|---:|---:|---:|---:|---:|---:|\n"
                 f"| {m['total_return']*100:+.2f}% "
                 f"| {m['index_return']*100:+.2f}% "
                 f"| {m['excess_return']*100:+.2f}% "
                 f"| {m['max_drawdown']*100:.2f}% "
+                f"| {_fmt_sharpe(m['annualized_sharpe'])} "
                 f"| {m['worst_month']*100:+.2f}% "
                 f"| {m['win_rate']*100:.0f}% "
                 f"| {m['fees']:.0f} |\n"

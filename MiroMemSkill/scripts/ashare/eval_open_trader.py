@@ -548,7 +548,26 @@ def replay(
     return capital / INITIAL_CAPITAL - 1.0, months
 
 
-def replay_metrics(total: float, months: list[dict]) -> dict[str, float]:
+def annualized_sharpe(
+    monthly_returns: Sequence[float], risk_free_monthly: float = 0.0
+) -> float | None:
+    """Monthly-frequency annualized Sharpe: sqrt(12) * mean / sample std.
+
+    Uses net monthly returns with a flat monthly risk-free rate (0 by
+    default, i.e. a same-window comparison convention, not an absolute
+    performance claim). Returns None when there are fewer than two
+    observations or the sample standard deviation is zero.
+    """
+    excess = [float(r) - risk_free_monthly for r in monthly_returns]
+    if len(excess) < 2:
+        return None
+    std = statistics.stdev(excess)
+    if not math.isfinite(std) or std <= 0.0:
+        return None
+    return math.sqrt(12.0) * statistics.mean(excess) / std
+
+
+def replay_metrics(total: float, months: list[dict]) -> dict[str, float | None]:
     peak = INITIAL_CAPITAL
     max_drawdown = 0.0
     valid = [month for month in months if "note" not in month]
@@ -568,6 +587,10 @@ def replay_metrics(total: float, months: list[dict]) -> dict[str, float]:
         ),
         "fees": sum(float(m.get("fees", 0.0)) for m in months),
         "valid_months": float(len(valid)),
+        # Invalid months fall back to cash and enter as 0-return months.
+        "annualized_sharpe": annualized_sharpe(
+            [float(m["net"]) for m in months]
+        ),
     }
 
 
@@ -821,16 +844,23 @@ def main() -> None:
         total, months = replay(market, tasks, alloc)
         run_results.append((label, alloc, total, months))
 
+    def _fmt_sharpe(value: float | None) -> str:
+        return f"{value:.2f}" if value is not None else "—"
+
     lines.append("## 统一指标")
     lines.append(
-        "| 策略 | 总收益% | 相对ETF核心pp | 最大回撤% | 最差月% | 胜率% | 费用 | 有效月 |"
+        "| 策略 | 总收益% | 指数收益% | 超额pp | 最大回撤% | Sharpe(年化) "
+        "| 相对ETF核心pp | 最差月% | 胜率% | 费用 | 有效月 |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for name, metrics in baseline_rows:
         lines.append(
             f"| {name} | {metrics['total'] * 100:+.2f} | "
-            f"{(metrics['total'] - core_total) * 100:+.2f} | "
+            f"{index_total * 100:+.2f} | "
+            f"{(metrics['total'] - index_total) * 100:+.2f} | "
             f"{metrics['max_drawdown'] * 100:.2f} | "
+            f"{_fmt_sharpe(metrics['annualized_sharpe'])} | "
+            f"{(metrics['total'] - core_total) * 100:+.2f} | "
             f"{metrics['worst_month'] * 100:+.2f} | "
             f"{metrics['win_rate'] * 100:.1f} | "
             f"{metrics['fees']:,.0f} | {int(metrics['valid_months'])}/12 |"
@@ -839,8 +869,11 @@ def main() -> None:
         metrics = replay_metrics(total, months)
         lines.append(
             f"| {label} | {metrics['total'] * 100:+.2f} | "
-            f"{(metrics['total'] - core_total) * 100:+.2f} | "
+            f"{index_total * 100:+.2f} | "
+            f"{(metrics['total'] - index_total) * 100:+.2f} | "
             f"{metrics['max_drawdown'] * 100:.2f} | "
+            f"{_fmt_sharpe(metrics['annualized_sharpe'])} | "
+            f"{(metrics['total'] - core_total) * 100:+.2f} | "
             f"{metrics['worst_month'] * 100:+.2f} | "
             f"{metrics['win_rate'] * 100:.1f} | "
             f"{metrics['fees']:,.0f} | {int(metrics['valid_months'])}/12 |"

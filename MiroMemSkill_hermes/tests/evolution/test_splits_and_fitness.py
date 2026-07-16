@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import math
+import statistics
 
 import pytest
 
 from src.evolution.fitness import (
     _sign_test_p,
+    evaluator,
     fitness_report,
     hard_gates,
     paired_stats,
@@ -89,7 +92,12 @@ def test_sign_test_exact_values():
     assert _sign_test_p(6, 6) == pytest.approx(1.0)
 
 
-def _arm(months_net: dict[str, float], mdd: float = -0.10, invalid=()) -> dict:
+def _arm(
+    months_net: dict[str, float],
+    mdd: float = -0.10,
+    invalid=(),
+    sharpe: float | None = 1.0,
+) -> dict:
     months = [
         {"as_of": k, "net": v, "index": 0.0, "capital": 1.0}
         for k, v in months_net.items()
@@ -103,6 +111,7 @@ def _arm(months_net: dict[str, float], mdd: float = -0.10, invalid=()) -> dict:
         "index_return": 0.0,
         "excess_return": sum(months_net.values()),
         "max_drawdown": mdd,
+        "annualized_sharpe": sharpe,
         "worst_month": min(months_net.values(), default=0.0),
         "win_rate": 0.5,
         "fees": 100.0,
@@ -142,3 +151,42 @@ def test_fitness_report_score_penalizes_drawdown():
     # score = 1.0 - 0.25 * 4pp degradation = 0.0
     assert report["score"] == pytest.approx(0.0)
     assert report["gates"]["passed"]
+
+
+def test_annualized_sharpe_formula_and_edge_cases():
+    ev = evaluator()
+    rets = [0.02, -0.01, 0.03, 0.00, -0.02, 0.04]
+    expected = math.sqrt(12.0) * statistics.mean(rets) / statistics.stdev(rets)
+    assert ev.annualized_sharpe(rets) == pytest.approx(expected)
+    # A flat monthly risk-free rate equal to the mean zeroes the ratio.
+    assert ev.annualized_sharpe(
+        rets, risk_free_monthly=statistics.mean(rets)
+    ) == pytest.approx(0.0)
+    # Fewer than two observations or zero volatility -> None (rendered as "—").
+    assert ev.annualized_sharpe([]) is None
+    assert ev.annualized_sharpe([0.05]) is None
+    assert ev.annualized_sharpe([0.01, 0.01, 0.01]) is None
+
+
+def test_replay_metrics_include_sharpe_with_cash_fallback_months():
+    ev = evaluator()
+    months = [
+        {"as_of": "a", "net": 0.02, "capital": 1.02, "fees": 1.0},
+        {"as_of": "b", "net": -0.01, "capital": 1.01, "fees": 1.0},
+        # Invalid month falls back to cash and counts as a 0-return month.
+        {"as_of": "c", "net": 0.0, "capital": 1.01, "note": "invalid->cash"},
+    ]
+    metrics = ev.replay_metrics(0.01, months)
+    expected = ev.annualized_sharpe([0.02, -0.01, 0.0])
+    assert metrics["annualized_sharpe"] == pytest.approx(expected)
+    assert metrics["valid_months"] == 2.0
+
+
+def test_fitness_report_carries_and_rounds_sharpe():
+    base = _arm({"a": 0.01, "b": 0.02}, sharpe=1.23456789)
+    cand = _arm({"a": 0.02, "b": 0.03}, sharpe=None)
+    report = fitness_report("probe", base, cand)
+    assert report["baseline"]["annualized_sharpe"] == pytest.approx(1.2346)
+    assert report["candidate"]["annualized_sharpe"] is None
+    # Report must stay JSON-serializable with a missing-sharpe arm.
+    json.dumps(report)

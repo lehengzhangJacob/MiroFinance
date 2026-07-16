@@ -9,7 +9,8 @@
     "worst_month": -0.065158,
     "win_rate": 0.6667,
     "fees": 9356.11,
-    "invalid_months": []
+    "invalid_months": [],
+    "annualized_sharpe": 2.0897
   },
   "candidate": {
     "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/candidate_dev_3aebb813bd33/out",
@@ -20,7 +21,8 @@
     "worst_month": -0.021824,
     "win_rate": 0.6667,
     "fees": 11595.32,
-    "invalid_months": []
+    "invalid_months": [],
+    "annualized_sharpe": 2.7463
   },
   "paired": {
     "months": [

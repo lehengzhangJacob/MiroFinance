@@ -18,6 +18,7 @@
       "index_return": 0.33755175573444984,
       "excess_return": 0.7912063413370778,
       "max_drawdown": -0.16535309889767758,
+      "annualized_sharpe": 1.4418753876707004,
       "worst_month": -0.13465657659307495,
       "win_rate": 0.7083333333333334,
       "fees": 43118.31
@@ -28,6 +29,7 @@
       "index_return": 0.13976386519252149,
       "excess_return": -0.1347256272259476,
       "max_drawdown": -0.16535309889767758,
+      "annualized_sharpe": 0.1348983014946923,
       "worst_month": -0.13465657659307495,
       "win_rate": 0.5833333333333334,
       "fees": 15777.470000000001
@@ -38,6 +40,7 @@
       "index_return": 0.1552863714024324,
       "excess_return": 0.2850272438098356,
       "max_drawdown": -0.050936810619304995,
+      "annualized_sharpe": 1.9430730351216843,
       "worst_month": -0.03966309593738615,
       "win_rate": 0.6666666666666666,
       "fees": 12694.03
@@ -48,6 +51,7 @@
       "index_return": 0.01579497843157962,
       "excess_return": 0.44975311564128884,
       "max_drawdown": 0.0,
+      "annualized_sharpe": 4.882563252252479,
       "worst_month": 0.00282311117566314,
       "win_rate": 1.0,
       "fees": 9969.58

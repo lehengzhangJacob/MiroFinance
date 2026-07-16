@@ -42,19 +42,42 @@ MATRIX_ARMS: dict[str, tuple[Path, str]] = {
         RUNS_ROOT / "plain_ablation_24m" / "arms" / "plain",
         "no memory, no skill",
     ),
+    "skill_only_pre": (
+        RUNS_ROOT / "_stitch_skillonly_baseline_24m",
+        "pre-evolution skill 0a931278001c, memory OFF "
+        "(stitched from formal24m_20260715 baseline rollouts)",
+    ),
     "skill_only_r1": (
         RUNS_ROOT / "skillonly_r1_24m" / "arms" / "r1_best",
         "FINAL R1 skill 3aebb813bd33, memory OFF",
     ),
     "mem_only": (
         RUNS_ROOT / "memonly_ablation_24m" / "arms" / "mem_only",
-        "trader-episode memory, no skill",
+        "trader-episode memory, no skill (w/o skill)",
+    ),
+    "wo_self_evolve": (
+        RUNS_ROOT / "mem_ablation_24m" / "arms" / "baseline",
+        "memory + pre-evolution skill 0a931278001c (w/o self-evolve)",
     ),
     "full_r1": (
         RUNS_ROOT / "mem_ablation_24m" / "arms" / "r1_best",
         "FINAL = memory + R1 skill 3aebb813bd33",
     ),
 }
+
+# Offline-stitched replay dirs: no arm_manifest.json, month count is the gate.
+STITCHED_ARMS = {"skill_only_pre"}
+
+ARM_METRIC_KEYS = (
+    "total_return",
+    "index_return",
+    "excess_return",
+    "max_drawdown",
+    "annualized_sharpe",
+    "worst_month",
+    "win_rate",
+    "fees",
+)
 
 SEGMENTS = {
     "full_24m": ("2024-07", "2026-06"),
@@ -64,19 +87,21 @@ SEGMENTS = {
 }
 
 
-def _arm_ready(arm_dir: Path) -> tuple[bool, str]:
+def _arm_ready(arm_dir: Path, stitched: bool = False) -> tuple[bool, str]:
     out_dir = arm_dir / "out"
-    manifest_path = arm_dir / "arm_manifest.json"
     if not out_dir.is_dir():
         return False, "no output dir (not started)"
+    attempts = len(list(out_dir.glob("task_*_attempt_1.json")))
+    if attempts != EXPECTED_MONTHS:
+        return False, f"incomplete: {attempts}/{EXPECTED_MONTHS} months"
+    if stitched:
+        return True, "ok (stitched replay)"
+    manifest_path = arm_dir / "arm_manifest.json"
     if not manifest_path.exists():
         return False, "no manifest"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("snapshot_db") != str(SNAPSHOT / "ashare_pools_snapshot.db"):
         return False, f"foreign snapshot: {manifest.get('snapshot_db')}"
-    attempts = len(list(out_dir.glob("task_*_attempt_1.json")))
-    if attempts != EXPECTED_MONTHS:
-        return False, f"incomplete: {attempts}/{EXPECTED_MONTHS} months"
     if manifest.get("exit_code") != 0:
         return False, f"exit_code={manifest.get('exit_code')}"
     return True, "ok"
@@ -95,7 +120,7 @@ def main() -> None:
     ready: dict[str, Path] = {}
     status: dict[str, str] = {}
     for label, (arm_dir, _desc) in MATRIX_ARMS.items():
-        ok, reason = _arm_ready(arm_dir)
+        ok, reason = _arm_ready(arm_dir, stitched=label in STITCHED_ARMS)
         status[label] = reason
         print(f"arm {label}: {reason}")
         if ok:
@@ -146,18 +171,7 @@ def main() -> None:
             "months": [seg_months[0], seg_months[-1]],
             "pair_ref": pair_ref,
             "arms": {
-                label: {
-                    key: arm[key]
-                    for key in (
-                        "total_return",
-                        "index_return",
-                        "excess_return",
-                        "max_drawdown",
-                        "worst_month",
-                        "win_rate",
-                        "fees",
-                    )
-                }
+                label: {key: arm[key] for key in ARM_METRIC_KEYS}
                 for label, arm in rows.items()
             },
             f"paired_vs_{pair_ref or 'none'}": paired,
@@ -167,14 +181,16 @@ def main() -> None:
             "",
             f"## {seg_name} ({seg_months[0]} .. {seg_months[-1]})",
             "",
-            "| arm | total | index | excess | maxDD | worst | win | "
+            "| arm | total | index | excess | maxDD | sharpe | worst | win | "
             f"vs {pair_ref or 'n/a'} (mean pp) | W-L | sign p |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
         for label in MATRIX_ARMS:
             if label not in rows:
                 continue
             arm = rows[label]
+            sharpe = arm.get("annualized_sharpe")
+            sharpe_cell = f"{sharpe:.2f}" if sharpe is not None else "—"
             pair = paired.get(label)
             if label == pair_ref:
                 pair_cells = "— | — | —"
@@ -191,6 +207,7 @@ def main() -> None:
                 f"| {arm['index_return']*100:+.2f}% "
                 f"| {arm['excess_return']*100:+.2f}% "
                 f"| {arm['max_drawdown']*100:.2f}% "
+                f"| {sharpe_cell} "
                 f"| {arm['worst_month']*100:+.2f}% "
                 f"| {arm['win_rate']*100:.0f}% "
                 f"| {pair_cells} |"
