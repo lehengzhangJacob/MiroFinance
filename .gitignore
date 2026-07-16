@@ -102,3 +102,9 @@ shared/ashare_open_stocks_glm52_24m_20260715/*.db-*
 MiroMemSkill/memory_bank/mem0_qdrant/
 MiroMemSkill_Evolve/
 MiroMemSkill_hermes/.evolution/.registry.lock
+
+# Ablation: keep scripts/skills/README; exclude GB-scale rollouts and locks
+ablation/runs/
+ablation/logs/
+ablation/reports/
+ablation/__pycache__/

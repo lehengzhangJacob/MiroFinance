@@ -1,0 +1,63 @@
+{
+  "level": "dev",
+  "baseline": {
+    "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline_dev/out",
+    "total_return": 0.293536,
+    "index_return": 0.155286,
+    "excess_return": 0.13825,
+    "max_drawdown": -0.065158,
+    "worst_month": -0.065158,
+    "win_rate": 0.6667,
+    "fees": 9356.11,
+    "invalid_months": []
+  },
+  "candidate": {
+    "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/candidate_dev_3aebb813bd33/out",
+    "total_return": 0.835316,
+    "index_return": 0.155286,
+    "excess_return": 0.68003,
+    "max_drawdown": -0.031199,
+    "worst_month": -0.021824,
+    "win_rate": 0.6667,
+    "fees": 11595.32,
+    "invalid_months": []
+  },
+  "paired": {
+    "months": [
+      "2025-07-04",
+      "2025-08-01",
+      "2025-09-01",
+      "2025-10-09",
+      "2025-11-06",
+      "2025-12-04"
+    ],
+    "diffs_pp": [
+      12.5867,
+      19.8841,
+      4.8218,
+      -2.8532,
+      4.3333,
+      1.881
+    ],
+    "mean_diff_pp": 6.7756,
+    "stdev_diff_pp": 8.1493,
+    "wins": 5,
+    "losses": 1,
+    "ties": 0,
+    "sign_test_p": 0.21875
+  },
+  "gates": {
+    "passed": true,
+    "failures": []
+  },
+  "score": 6.7756,
+  "run_id": "formal24m_20260715",
+  "months": [
+    "2025-07-04",
+    "2025-08-01",
+    "2025-09-01",
+    "2025-10-09",
+    "2025-11-06",
+    "2025-12-04"
+  ]
+}

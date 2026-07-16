@@ -1,0 +1,63 @@
+{
+  "level": "holdout",
+  "baseline": {
+    "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/baseline/out",
+    "total_return": -0.018943,
+    "index_return": 0.015795,
+    "excess_return": -0.034738,
+    "max_drawdown": -0.074097,
+    "worst_month": -0.074097,
+    "win_rate": 0.5,
+    "fees": 7558.51,
+    "invalid_months": []
+  },
+  "candidate": {
+    "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_20260715/arms/candidate/out",
+    "total_return": 0.38952,
+    "index_return": 0.015795,
+    "excess_return": 0.373725,
+    "max_drawdown": -0.038379,
+    "worst_month": -0.038379,
+    "win_rate": 0.8333,
+    "fees": 10270.07,
+    "invalid_months": []
+  },
+  "paired": {
+    "months": [
+      "2026-01-05",
+      "2026-02-02",
+      "2026-03-10",
+      "2026-04-08",
+      "2026-05-11",
+      "2026-06-08"
+    ],
+    "diffs_pp": [
+      -3.5428,
+      3.346,
+      12.2713,
+      0.0438,
+      9.3952,
+      14.1269
+    ],
+    "mean_diff_pp": 5.9401,
+    "stdev_diff_pp": 7.0777,
+    "wins": 5,
+    "losses": 1,
+    "ties": 0,
+    "sign_test_p": 0.21875
+  },
+  "gates": {
+    "passed": true,
+    "failures": []
+  },
+  "score": 5.9401,
+  "run_id": "formal24m_20260715",
+  "months": [
+    "2026-01-05",
+    "2026-02-02",
+    "2026-03-10",
+    "2026-04-08",
+    "2026-05-11",
+    "2026-06-08"
+  ]
+}
