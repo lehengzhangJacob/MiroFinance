@@ -1,0 +1,56 @@
+{
+  "role": "main_experiment_full24m_eval",
+  "note": "Post-evolution evaluation: full 24m skill-only continuous run (own_glm5). Not the sealed train/dev/holdout selection protocol.",
+  "run_id": "skillonly_r1_24m",
+  "skill": "3aebb813bd33",
+  "config_name": "agent_ashare_trader_open_hermes_glm",
+  "snapshot": "ashare_open_stocks_glm52_24m_20260715",
+  "arm_check": {
+    "attempts": 24,
+    "episodes_logged": 0,
+    "prompts_with_skill": 24,
+    "prompts_with_memory": 0
+  },
+  "segments": {
+    "full_24m": {
+      "months": "2024-07-01..2026-06-08",
+      "total_return": 1.1287580970715276,
+      "index_return": 0.33755175573444984,
+      "excess_return": 0.7912063413370778,
+      "max_drawdown": -0.16535309889767758,
+      "worst_month": -0.13465657659307495,
+      "win_rate": 0.7083333333333334,
+      "fees": 43118.31
+    },
+    "formal_12m": {
+      "months": "2024-07-01..2025-06-06",
+      "total_return": 0.0050382379665738775,
+      "index_return": 0.13976386519252149,
+      "excess_return": -0.1347256272259476,
+      "max_drawdown": -0.16535309889767758,
+      "worst_month": -0.13465657659307495,
+      "win_rate": 0.5833333333333334,
+      "fees": 15777.470000000001
+    },
+    "dev_6m": {
+      "months": "2025-07-04..2025-12-04",
+      "total_return": 0.440313615212268,
+      "index_return": 0.1552863714024324,
+      "excess_return": 0.2850272438098356,
+      "max_drawdown": -0.050936810619304995,
+      "worst_month": -0.03966309593738615,
+      "win_rate": 0.6666666666666666,
+      "fees": 12694.03
+    },
+    "holdout_6m": {
+      "months": "2026-01-05..2026-06-08",
+      "total_return": 0.46554809407286846,
+      "index_return": 0.01579497843157962,
+      "excess_return": 0.44975311564128884,
+      "max_drawdown": 0.0,
+      "worst_month": 0.00282311117566314,
+      "win_rate": 1.0,
+      "fees": 9969.58
+    }
+  }
+}

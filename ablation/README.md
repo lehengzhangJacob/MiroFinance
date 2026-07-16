@@ -46,7 +46,12 @@ Do not commit key files (`own_*` is gitignored).
 `build_ablation_matrix.py` pairs against `full_r1` when ready (else `plain`).
 Incomplete arms are skipped; re-run any time.
 
-Headline numbers also live in the repo-root [`README.md`](../README.md) 消融对照表.
+**Evaluation window for ablations and the main experiment (post-evolution):**
+the full 24 months (2024-07..2026-06) as one block. Train/dev/holdout is only
+for the Hermes *selection* protocol documented under
+`r1_best_3aebb813bd33/` — not the primary ablation comparison.
+
+Headline numbers live in the repo-root [`README.md`](../README.md).
 
 ### Completed: w/o self-evolve (24 months)
 
@@ -72,18 +77,19 @@ Headline numbers also live in the repo-root [`README.md`](../README.md) 消融�
 
 vs w/o self-evolve on full_24m: total **-12.18pp**, excess **-12.19pp**.
 
-### vs main experiment R1 (`r1_best_3aebb813bd33/`)
+### vs main experiment on full_24m
 
-Sealed skill-only protocol from `formal24m_20260715` (Memory OFF). Ablation cells are Memory ON — same snapshot/evaluator, different protocol.
+Primary comparison is **full 24 months**, not sealed dev/holdout.
+Main R1 artifact: [`r1_best_3aebb813bd33/fitness_full_24m.md`](r1_best_3aebb813bd33/fitness_full_24m.md).
 
-| Cell | Protocol | Dev total | Holdout total | Holdout excess |
-|------|----------|----------:|--------------:|---------------:|
-| **Main R1** `3aebb813bd33` | skill-only | **+83.53%** | **+38.95%** | **+37.37%** |
-| Main baseline skill | skill-only | +29.35% | -1.89% | -3.47% |
-| w/o self-evolve | memory + `0a931…` | +22.04% | -6.18% | -7.76% |
-| w/o skill | memory, no skill | +19.16% | +16.66% | +15.08% |
+| Cell | Protocol | full_24m total | Excess | MaxDD | vs main R1 |
+|------|----------|---------------:|-------:|------:|-----------:|
+| **Main R1** `3aebb813bd33` | skill-only | **+112.88%** | +79.12% | -16.54% | — |
+| Skill-only baseline `0a931…` | skill-only (formal stitch) | +80.37% | +46.62% | -13.50% | -32.50pp |
+| w/o self-evolve | memory + `0a931…` | +34.48% | +0.73% | -16.62% | -78.39pp |
+| w/o skill | memory, no skill | +22.30% | -11.46% | -26.92% | -90.58pp |
 
-Source: [`r1_best_3aebb813bd33/fitness_dev.*`](r1_best_3aebb813bd33/) / `fitness_holdout.*`. Full narrative in repo-root README.
+Sealed `fitness_dev` / `fitness_holdout` remain the *evolution selection* record only.
 
 ## Memory-ON skill ablation (24 months)
 

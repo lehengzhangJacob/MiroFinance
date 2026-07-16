@@ -13,11 +13,13 @@
 | Dev (2025-07..12) | +29.35% | +83.53% | +6.78pp | 5-1 | PASS |
 | Holdout (2026-01..06) | -1.89% | +38.95% | +5.94pp | 5-1 | PASS |
 
-This is the **primary formal Hermes R1 result**: first sealed holdout open for this lineage.
-Later R2+ rounds (legacy / walk-forward / ongoing dev-only) are exploratory and should not replace this artifact as the main ablation arm.
+This is the **primary formal Hermes R1 selection result**: sealed holdout for promotion.
+Later R2+ rounds are exploratory. **Post-evolution evaluation** uses the full
+24-month window (see `fitness_full_24m.*`), not the selection splits.
 
 ## Files
 
 - `ashare_open_portfolio.md` — promoted R1 skill text
-- `fitness_dev.json` / `.md` — paired evaluation on 2025-07..12
-- `fitness_holdout.json` / `.md` — sealed evaluation on 2026-01..06
+- `fitness_dev.json` / `.md` — selection: paired evaluation on 2025-07..12
+- `fitness_holdout.json` / `.md` — selection: sealed evaluation on 2026-01..06
+- `fitness_full_24m.json` / `.md` — **evaluation**: continuous skill-only 24m (`skillonly_r1_24m`, +112.88%)
