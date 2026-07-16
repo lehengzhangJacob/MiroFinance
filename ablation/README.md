@@ -72,6 +72,19 @@ Headline numbers also live in the repo-root [`README.md`](../README.md) 消融�
 
 vs w/o self-evolve on full_24m: total **-12.18pp**, excess **-12.19pp**.
 
+### vs main experiment R1 (`r1_best_3aebb813bd33/`)
+
+Sealed skill-only protocol from `formal24m_20260715` (Memory OFF). Ablation cells are Memory ON — same snapshot/evaluator, different protocol.
+
+| Cell | Protocol | Dev total | Holdout total | Holdout excess |
+|------|----------|----------:|--------------:|---------------:|
+| **Main R1** `3aebb813bd33` | skill-only | **+83.53%** | **+38.95%** | **+37.37%** |
+| Main baseline skill | skill-only | +29.35% | -1.89% | -3.47% |
+| w/o self-evolve | memory + `0a931…` | +22.04% | -6.18% | -7.76% |
+| w/o skill | memory, no skill | +19.16% | +16.66% | +15.08% |
+
+Source: [`r1_best_3aebb813bd33/fitness_dev.*`](r1_best_3aebb813bd33/) / `fitness_holdout.*`. Full narrative in repo-root README.
+
 ## Memory-ON skill ablation (24 months)
 
 Question answered: **does the R1-evolved skill text still help when the full

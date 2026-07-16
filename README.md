@@ -181,14 +181,35 @@ Run：`ablation/runs/memonly_ablation_24m/arms/mem_only`（24/24，config=`agent
 
 全窗：月胜率 54.2%，费用 ¥32,432，无效月 0。
 
-#### 两格对照（同一快照、同一回放器；跨 run、单种子，描述性）
+#### 对照表（含主实验 R1）
 
-| 格子 | 总收益 | 超额 | 最大回撤 | 相对 w/o self-evolve（总收益） |
-|------|-------:|-----:|---------:|-------------------------------:|
-| **w/o self-evolve** | +34.48% | +0.73% | -16.62% | —（底座） |
-| **w/o skill** | +22.30% | -11.46% | -26.92% | **-12.18pp** |
+主实验数字来自 [`ablation/r1_best_3aebb813bd33/`](ablation/r1_best_3aebb813bd33/)（`formal24m_20260715` 密封 fitness）：**Skill=`3aebb813bd33`，Memory 关（skill-only 协议）**。  
+消融两格为 **Memory 开**、跨 run、单种子；同一快照与同一确定性回放器，但**协议不同，不能当配对检验**。
 
-**解读**：去掉 Skill 后，24 个月累计收益明显低于「Memory + 进化前 Skill」底座，且全窗超额转负；说明在当前设定下 Skill 文本对 Memory 臂并非可有可无。分段上 w/o skill 在 formal_12m 拖累最大（-11.88%），后半年反而不差——仍以 full_24m 为总对照。
+**A. 全窗 24 个月（仅消融格；主实验未跑 full_24m）**
+
+| 格子 | 协议 | 总收益 | 超额 | 最大回撤 | 相对 w/o self-evolve |
+|------|------|-------:|-----:|---------:|---------------------:|
+| **w/o self-evolve** | Memory + Skill`0a931…` | +34.48% | +0.73% | -16.62% | —（消融底座） |
+| **w/o skill** | Memory，无 Skill | +22.30% | -11.46% | -26.92% | **-12.18pp** |
+| 主实验 R1 | Skill`3aebb…`，Memory 关 | — | — | — | 无全窗密封数字 |
+
+**B. 与主实验对齐的分段（dev / holdout = formal24m 密封窗）**
+
+| 格子 | 协议 | Dev 总收益 (2025-07..12) | Holdout 总收益 (2026-01..06) | Holdout 超额 | Holdout maxDD |
+|------|------|-------------------------:|-----------------------------:|-------------:|--------------:|
+| **主实验 R1** `3aebb813bd33` | Skill-only（Memory 关） | **+83.53%** | **+38.95%** | **+37.37%** | **-3.84%** |
+| 主实验 baseline Skill | Skill-only（Memory 关） | +29.35% | -1.89% | -3.47% | -7.41% |
+| **w/o self-evolve** | Memory + Skill`0a931…` | +22.04% | -6.18% | -7.76% | -10.99% |
+| **w/o skill** | Memory，无 Skill | +19.16% | +16.66% | +15.08% | -2.20% |
+
+主实验 R1 相对其 skill-only baseline：dev 配对均值 **+6.78pp**（5-1），holdout 配对均值 **+5.94pp**（5-1），硬门控 PASS（详见上文 Hermes 正式实验节与 `fitness_{dev,holdout}.*`）。
+
+**解读**
+
+1. **消融内部**：去掉 Skill（w/o skill vs w/o self-evolve）全窗总收益 **-12.18pp**，说明在 Memory 开的设定下，进化前 Skill 文本仍有实质贡献。
+2. **对主实验**：密封窗上主实验 R1（Memory 关 + 进化后 Skill）远强于两消融格（Memory 开 ± 无/旧 Skill）。这不能直接读成「Memory 有害」——协议不同（有无 Skill、是否为 R1 文本、是否 skill-only 选出）；真正的 Memory×R1 交互要等 **FINAL = Memory + `3aebb813bd33`** 与 **skill-only R1 复现臂** 跑完再比。
+3. 分段上 w/o skill 在 holdout 看起来不差（+16.66%），但 formal_12m 深度拖累（-11.88%），故以 full_24m 与密封 holdout 对照主实验时分开读。
 
 ### 其余格子（进行中，跑完后回填）
 
@@ -216,4 +237,4 @@ Run：`ablation/runs/memonly_ablation_24m/arms/mem_only`（24/24，config=`agent
 
 ---
 
-*最后更新：2026-07-16（消融表 + w/o self-evolve / w/o skill 24m 指标）*
+*最后更新：2026-07-16（消融表对照主实验 R1 `3aebb813bd33` 密封数字）*
