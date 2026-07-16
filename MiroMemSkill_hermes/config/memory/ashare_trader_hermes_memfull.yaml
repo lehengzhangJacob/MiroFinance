@@ -1,0 +1,46 @@
+# Memory-ON ablation arm: full MemSkill trader runtime + one materialized skill.
+#
+# Episodic memory behaves exactly like the MemSkill-Full formal config
+# (ashare_trader_open_mem0): a factual portfolio episode is recorded at each
+# month barrier and becomes visible only after its exit date matures, so a
+# 24-month sequential run accumulates experience without lookahead.
+#
+# Differences vs ashare_trader_open_mem0 are confined to arm hygiene:
+#   - store/skills/namespace come from the controller's per-arm env vars,
+#     so paired baseline/candidate arms never share state;
+#   - the matched skill is injected FULL BODY (max_chars <= 0), matching the
+#     Hermes evolution arms under which the candidate skill was selected.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "${oc.env:HERMES_STORE_DIR,memory_bank}"
+skills_dir: "${oc.env:HERMES_SKILLS_DIR,memory_bank/skills_ashare}"
+
+namespace: "ashare_hermes_${oc.env:ASHARE_TRADER_RUN_ID}"
+
+# Generic semantic lessons stay disabled, as in the formal MemSkill config.
+# Trader episodes use the dedicated deterministic renderer with an exit-date
+# embargo; they are the memory channel of this arm.
+inject_top_k: 0
+inject_enabled: false
+skill_top_k: 1
+skill_enabled: true
+skill_preview_min_score: 0.0
+skill_preview_max_chars: 0
+skill_list_others: false
+
+calibration_enabled: false
+calibration_mode: "off"
+reflection_enabled: true
+reflection_mode: "trader"
+rank_factor_min_months: 3
+rank_factor_fdr_q: 0.10
+rank_factor_status_enabled: false
+trader_episode_max: 3
+trader_episode_notional: 1000000
+
+outcome_logging_enabled: false
+feature_evidence_enabled: false
+expose_memory_search: "never"
+expose_memory_save: false
+embedding_model: "embedding-3"

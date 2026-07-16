@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# LEGACY: per-round holdout + intermediate promotion on the fixed 12/6/6 split.
+# Prefer the sealed protocol instead:
+#   scripts/ashare/run_formal24m_devonly_r2_r4_chain_nohup.sh
+#
 # Wait for the already-running R2, then run R3 and R4 sequentially.
 #
 # Start in the background:

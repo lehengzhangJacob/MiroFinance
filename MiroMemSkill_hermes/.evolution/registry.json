@@ -2,7 +2,7 @@
   "skill_name": "ashare_open_portfolio",
   "skill_rel_path": "memory_bank/skills_ashare/ashare_open_portfolio.md",
   "baseline_digest": "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7",
-  "active_digest": "896181a83a501a312d0bf543afa9f77e1c4f4de071037a79b647c6cbff86ff06",
+  "active_digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
   "created_at": "2026-07-14T14:16:10+00:00",
   "candidates": {
     "0a931278001cf2bc4a218c2d13ce93a0d86a90604c503acd91ab052f75259ef7": {
@@ -1311,6 +1311,234 @@
           ]
         }
       }
+    },
+    "9823124764c8bfc53f4ddc4268cbd485befa561e3fd7b3badf7d435e3c9ba8fe": {
+      "digest": "9823124764c8bfc53f4ddc4268cbd485befa561e3fd7b3badf7d435e3c9ba8fe",
+      "short_id": "9823124764c8",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/baseline_train/out (train, parent=3aebb813bd33)",
+      "status": "dev_evaluated",
+      "created_at": "2026-07-16T04:45:48+00:00",
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-16T05:32:14+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/baseline_dev/out",
+            "total_return": 0.507027,
+            "index_return": 0.155286,
+            "excess_return": 0.351741,
+            "max_drawdown": -0.083482,
+            "worst_month": -0.083482,
+            "win_rate": 0.8333,
+            "fees": 11105.88,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/candidate_dev_9823124764c8/out",
+            "total_return": 0.195808,
+            "index_return": 0.155286,
+            "excess_return": 0.040521,
+            "max_drawdown": -0.023522,
+            "worst_month": -0.013892,
+            "win_rate": 0.6667,
+            "fees": 8700.85,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-07-04",
+              "2025-08-01",
+              "2025-09-01",
+              "2025-10-09",
+              "2025-11-06",
+              "2025-12-04"
+            ],
+            "diffs_pp": [
+              -7.2706,
+              -26.822,
+              8.3938,
+              -11.3464,
+              6.9591,
+              2.4087
+            ],
+            "mean_diff_pp": -4.6129,
+            "stdev_diff_pp": 13.4017,
+            "wins": 3,
+            "losses": 3,
+            "ties": 0,
+            "sign_test_p": 1.0
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": -4.6129,
+          "run_id": "formal24m_devonly_r2_20260716",
+          "months": [
+            "2025-07-04",
+            "2025-08-01",
+            "2025-09-01",
+            "2025-10-09",
+            "2025-11-06",
+            "2025-12-04"
+          ]
+        }
+      }
+    },
+    "3d989c43bca71d5ddcf47f2227e56f25d99db7df1f7cdc90eeb2d35bf17ecdfe": {
+      "digest": "3d989c43bca71d5ddcf47f2227e56f25d99db7df1f7cdc90eeb2d35bf17ecdfe",
+      "short_id": "3d989c43bca7",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/baseline_train/out (train, parent=3aebb813bd33)",
+      "status": "dev_evaluated",
+      "created_at": "2026-07-16T04:45:48+00:00",
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-16T05:55:48+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/baseline_dev/out",
+            "total_return": 0.507027,
+            "index_return": 0.155286,
+            "excess_return": 0.351741,
+            "max_drawdown": -0.083482,
+            "worst_month": -0.083482,
+            "win_rate": 0.8333,
+            "fees": 11105.88,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/candidate_dev_3d989c43bca7/out",
+            "total_return": 0.123022,
+            "index_return": 0.155286,
+            "excess_return": -0.032265,
+            "max_drawdown": -0.105234,
+            "worst_month": -0.105234,
+            "win_rate": 0.8333,
+            "fees": 11071.37,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-07-04",
+              "2025-08-01",
+              "2025-09-01",
+              "2025-10-09",
+              "2025-11-06",
+              "2025-12-04"
+            ],
+            "diffs_pp": [
+              -5.7566,
+              -19.0658,
+              0.4911,
+              -8.1778,
+              -2.1752,
+              1.4373
+            ],
+            "mean_diff_pp": -5.5412,
+            "stdev_diff_pp": 7.5675,
+            "wins": 2,
+            "losses": 4,
+            "ties": 0,
+            "sign_test_p": 0.6875
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": -6.085,
+          "run_id": "formal24m_devonly_r2_20260716",
+          "months": [
+            "2025-07-04",
+            "2025-08-01",
+            "2025-09-01",
+            "2025-10-09",
+            "2025-11-06",
+            "2025-12-04"
+          ]
+        }
+      }
+    },
+    "8b45913fa35e38abc9e2c360ad8f10fd27fc2e27475dfcc02360c2b96334da39": {
+      "digest": "8b45913fa35e38abc9e2c360ad8f10fd27fc2e27475dfcc02360c2b96334da39",
+      "short_id": "8b45913fa35e",
+      "name": "ashare_open_portfolio",
+      "parent_digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
+      "generator": "reflective_mutation_glm",
+      "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/baseline_train/out (train, parent=3aebb813bd33)",
+      "status": "dev_evaluated",
+      "created_at": "2026-07-16T04:45:48+00:00",
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-16T06:21:56+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/baseline_dev/out",
+            "total_return": 0.507027,
+            "index_return": 0.155286,
+            "excess_return": 0.351741,
+            "max_drawdown": -0.083482,
+            "worst_month": -0.083482,
+            "win_rate": 0.8333,
+            "fees": 11105.88,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/formal24m_devonly_r2_20260716/arms/candidate_dev_8b45913fa35e/out",
+            "total_return": 0.347063,
+            "index_return": 0.155286,
+            "excess_return": 0.191776,
+            "max_drawdown": -0.021549,
+            "worst_month": -0.021549,
+            "win_rate": 0.8333,
+            "fees": 11593.64,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-07-04",
+              "2025-08-01",
+              "2025-09-01",
+              "2025-10-09",
+              "2025-11-06",
+              "2025-12-04"
+            ],
+            "diffs_pp": [
+              5.1338,
+              -18.3004,
+              1.8166,
+              -10.1482,
+              6.1933,
+              0.935
+            ],
+            "mean_diff_pp": -2.395,
+            "stdev_diff_pp": 9.7197,
+            "wins": 4,
+            "losses": 2,
+            "ties": 0,
+            "sign_test_p": 0.6875
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": -2.395,
+          "run_id": "formal24m_devonly_r2_20260716",
+          "months": [
+            "2025-07-04",
+            "2025-08-01",
+            "2025-09-01",
+            "2025-10-09",
+            "2025-11-06",
+            "2025-12-04"
+          ]
+        }
+      }
     }
   },
   "holdout_leases": {
@@ -1349,6 +1577,12 @@
       "run_id": "formal24m_r2_20260715",
       "backup": ".evolution/backups/20260716_011239_3aebb813bd33.md",
       "at": "2026-07-15T17:12:39+00:00"
+    },
+    {
+      "digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
+      "previous_digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
+      "rollback": true,
+      "at": "2026-07-16T03:47:01+00:00"
     }
   ]
 }

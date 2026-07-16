@@ -1,0 +1,43 @@
+# Memory-ONLY ablation arm: full episodic trader memory, ZERO skill injection.
+#
+# Identical to ashare_trader_hermes_memfull except the skill channel is off:
+# no SkillLibrary is constructed and no "Top Skill Preview" section is ever
+# injected. Episodic memory behaves exactly like the MemSkill-Full formal
+# config: a factual portfolio episode is recorded at each month barrier and
+# becomes visible only after its exit date matures (no lookahead).
+#
+# Store/namespace stay per-arm (controller env vars) so paired arms never
+# share state.
+enabled: true
+backend: "mem0_qdrant"
+embedding_dims: 2048
+store_dir: "${oc.env:HERMES_STORE_DIR,memory_bank}"
+skills_dir: "${oc.env:HERMES_SKILLS_DIR,memory_bank/skills_ashare}"
+
+namespace: "ashare_hermes_${oc.env:ASHARE_TRADER_RUN_ID}"
+
+# Generic semantic lessons stay disabled, as in the formal MemSkill config.
+# Trader episodes are the ONLY injected channel of this arm.
+inject_top_k: 0
+inject_enabled: false
+skill_top_k: 0
+skill_enabled: false
+skill_preview_min_score: 0.0
+skill_preview_max_chars: 0
+skill_list_others: false
+
+calibration_enabled: false
+calibration_mode: "off"
+reflection_enabled: true
+reflection_mode: "trader"
+rank_factor_min_months: 3
+rank_factor_fdr_q: 0.10
+rank_factor_status_enabled: false
+trader_episode_max: 3
+trader_episode_notional: 1000000
+
+outcome_logging_enabled: false
+feature_evidence_enabled: false
+expose_memory_search: "never"
+expose_memory_save: false
+embedding_model: "embedding-3"
