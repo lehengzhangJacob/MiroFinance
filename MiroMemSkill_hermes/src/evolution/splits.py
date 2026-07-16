@@ -50,20 +50,28 @@ def make_splits(
     train_months: int = 6,
     dev_months: int = 3,
     holdout_months: int = 3,
+    skip_months: int = 0,
 ) -> MonthSplits:
+    """Chronological splits; ``skip_months`` drops the oldest months first.
+
+    A walk-forward round k passes ``skip_months=k*step`` so that train/dev/
+    holdout all roll forward together while month order and disjointness are
+    preserved.
+    """
     as_ofs = [str(t["metadata"]["as_of"]) for t in tasks]
     if len(set(as_ofs)) != len(as_ofs):
         raise ValueError("duplicate as_of dates in task file")
-    if len(as_ofs) < train_months + dev_months + holdout_months:
-        raise ValueError(
-            f"need >= {train_months + dev_months + holdout_months} months, "
-            f"got {len(as_ofs)}"
-        )
+    if skip_months < 0:
+        raise ValueError("skip_months must be >= 0")
+    needed = skip_months + train_months + dev_months + holdout_months
+    if len(as_ofs) < needed:
+        raise ValueError(f"need >= {needed} months, got {len(as_ofs)}")
+    window = as_ofs[skip_months:]
     return MonthSplits(
-        train=tuple(as_ofs[:train_months]),
-        dev=tuple(as_ofs[train_months : train_months + dev_months]),
+        train=tuple(window[:train_months]),
+        dev=tuple(window[train_months : train_months + dev_months]),
         holdout=tuple(
-            as_ofs[
+            window[
                 train_months + dev_months : train_months
                 + dev_months
                 + holdout_months

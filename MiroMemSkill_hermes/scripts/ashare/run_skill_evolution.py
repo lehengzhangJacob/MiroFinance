@@ -77,6 +77,7 @@ class EvolutionCLI:
         train_months: int = 6,
         dev_months: int = 3,
         holdout_months: int = 3,
+        skip_months: int = 0,
     ):
         self._registry = SkillRegistry(REPO_ROOT, skill)
         self._controller = EvolutionController(
@@ -87,6 +88,7 @@ class EvolutionCLI:
             train_months=train_months,
             dev_months=dev_months,
             holdout_months=holdout_months,
+            skip_months=skip_months,
         )
         _bootstrap_llm_keys(REPO_ROOT)
 

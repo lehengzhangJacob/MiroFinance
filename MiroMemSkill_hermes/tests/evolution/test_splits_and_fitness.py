@@ -72,6 +72,38 @@ def test_splits_24_months_12_6_6():
     assert len(set(splits.train) | set(splits.dev) | set(splits.holdout)) == 24
 
 
+def test_splits_walk_forward_skip_months():
+    tasks = make_tasks(MONTHS_24)
+    rounds = {
+        step: make_splits(
+            tasks,
+            train_months=12,
+            dev_months=6,
+            holdout_months=2,
+            skip_months=step,
+        )
+        for step in (0, 2, 4)
+    }
+    assert rounds[0].holdout == tuple(MONTHS_24[18:20])
+    assert rounds[2].holdout == tuple(MONTHS_24[20:22])
+    assert rounds[4].holdout == tuple(MONTHS_24[22:24])
+    # windows roll together and holdouts never overlap across rounds
+    assert rounds[2].train == tuple(MONTHS_24[2:14])
+    assert rounds[2].dev == tuple(MONTHS_24[14:20])
+    holdouts = [set(r.holdout) for r in rounds.values()]
+    assert not (holdouts[0] & holdouts[1] or holdouts[1] & holdouts[2])
+    with pytest.raises(ValueError, match="need >="):
+        make_splits(
+            tasks,
+            train_months=12,
+            dev_months=6,
+            holdout_months=2,
+            skip_months=5,
+        )
+    with pytest.raises(ValueError, match="skip_months"):
+        make_splits(tasks, skip_months=-1)
+
+
 def test_write_task_subset_layout(tmp_path):
     tasks = make_tasks(MONTHS_12)
     out = write_task_subset(tasks, tuple(MONTHS_12[:2]), tmp_path / "data")

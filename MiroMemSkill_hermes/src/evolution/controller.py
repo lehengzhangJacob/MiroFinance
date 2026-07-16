@@ -85,6 +85,7 @@ class EvolutionController:
         train_months: int = 6,
         dev_months: int = 3,
         holdout_months: int = 3,
+        skip_months: int = 0,
     ):
         self.repo_root = (
             Path(repo_root).resolve()
@@ -103,6 +104,7 @@ class EvolutionController:
         self.python_exe = python_exe or sys.executable
         self.runs_root = self.repo_root / ".evolution" / "runs"
         self._split_counts = (train_months, dev_months, holdout_months)
+        self._skip_months = skip_months
 
     # -------------------------------------------------------------- tasks
 
@@ -114,6 +116,7 @@ class EvolutionController:
             train_months=train,
             dev_months=dev,
             holdout_months=holdout,
+            skip_months=self._skip_months,
         )
 
     # --------------------------------------------------------------- arms

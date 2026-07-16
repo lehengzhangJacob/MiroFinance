@@ -295,11 +295,12 @@ class SkillRegistry:
             tmp = self.skill_path.with_suffix(".md.tmp")
             tmp.write_text(target.text, encoding="utf-8")
             os.replace(tmp, self.skill_path)
+            previous = data["active_digest"]
             data["active_digest"] = target.digest
             data["promotions"].append(
                 {
                     "digest": target.digest,
-                    "previous_digest": data["active_digest"],
+                    "previous_digest": previous,
                     "rollback": True,
                     "at": _utcnow(),
                 }
