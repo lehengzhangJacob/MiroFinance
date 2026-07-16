@@ -2095,9 +2095,74 @@
       "parent_digest": "3aebb813bd334a06b2fdb2f98ba3d9461c5be8bc08f51ed11229f4e3d38b65b4",
       "generator": "reflective_mutation_glm",
       "rationale": "reflective mutation from /home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/wf24m_r4_20260716/arms/baseline_train/out (train, parent=3aebb813bd33)",
-      "status": "proposed",
+      "status": "dev_evaluated",
       "created_at": "2026-07-16T01:42:25+00:00",
-      "reports": {}
+      "reports": {
+        "fitness_dev": {
+          "at": "2026-07-16T03:21:55+00:00",
+          "level": "dev",
+          "baseline": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/wf24m_r4_20260716/arms/baseline_dev/out",
+            "total_return": 0.239057,
+            "index_return": 0.055063,
+            "excess_return": 0.183994,
+            "max_drawdown": -0.057843,
+            "worst_month": -0.057843,
+            "win_rate": 0.6667,
+            "fees": 10428.58,
+            "invalid_months": []
+          },
+          "candidate": {
+            "run_dir": "/home/msj_team/Jacob/agent/MiroMemSkill_hermes/.evolution/runs/wf24m_r4_20260716/arms/candidate_dev_49ed5cd67b6d/out",
+            "total_return": 0.022483,
+            "index_return": 0.055063,
+            "excess_return": -0.03258,
+            "max_drawdown": -0.060763,
+            "worst_month": -0.060763,
+            "win_rate": 0.6667,
+            "fees": 8945.42,
+            "invalid_months": []
+          },
+          "paired": {
+            "months": [
+              "2025-11-06",
+              "2025-12-04",
+              "2026-01-05",
+              "2026-02-02",
+              "2026-03-10",
+              "2026-04-08"
+            ],
+            "diffs_pp": [
+              -0.292,
+              -9.2506,
+              -2.5059,
+              -2.7632,
+              2.0404,
+              -7.6541
+            ],
+            "mean_diff_pp": -3.4042,
+            "stdev_diff_pp": 4.3079,
+            "wins": 1,
+            "losses": 5,
+            "ties": 0,
+            "sign_test_p": 0.21875
+          },
+          "gates": {
+            "passed": true,
+            "failures": []
+          },
+          "score": -3.477203,
+          "run_id": "wf24m_r4_20260716",
+          "months": [
+            "2025-11-06",
+            "2025-12-04",
+            "2026-01-05",
+            "2026-02-02",
+            "2026-03-10",
+            "2026-04-08"
+          ]
+        }
+      }
     }
   },
   "holdout_leases": {
@@ -2128,6 +2193,10 @@
     "9504996a40d5f900de0c4d289bb5dc8190ac5d55264838fdb46dd1ec6c0b46ce": {
       "run_id": "wf24m_r3_20260716",
       "acquired_at": "2026-07-16T00:43:08+00:00"
+    },
+    "55881b7f4c533ffc56c7e6ea7a241bb251a2c0bb44a58fa1a45d960d55b56146": {
+      "run_id": "wf24m_r4_20260716",
+      "acquired_at": "2026-07-16T03:21:55+00:00"
     }
   },
   "promotions": [
